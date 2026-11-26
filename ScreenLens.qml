@@ -71,6 +71,7 @@ Item {
   readonly property color accentColor: Commons.Color.accent
   readonly property color urgentColor: Commons.Color.urgent
   readonly property color borderColor: Commons.Color.menu.border
+  readonly property color scrimColor: Commons.Color.menu.scrim
   readonly property var cardBorderSpec: Border.surfaceSpec("menu", "border", borderColor, Math.max(1, Style.space(2)))
   readonly property int cornerRadius: Style.cornerRadius
   readonly property string uiFont: Style.font.menuFamily
@@ -628,10 +629,10 @@ Item {
       readonly property real rw: root.selectionRect ? root.selectionRect.w : 0
       readonly property real rh: root.selectionRect ? root.selectionRect.h : 0
 
-      Rectangle { x: 0; y: 0; width: parent.width; height: Math.max(0, parent.ry); color: Qt.rgba(0, 0, 0, 0.44) }
-      Rectangle { x: 0; y: parent.ry + parent.rh; width: parent.width; height: Math.max(0, parent.height - (parent.ry + parent.rh)); color: Qt.rgba(0, 0, 0, 0.44) }
-      Rectangle { x: 0; y: parent.ry; width: Math.max(0, parent.rx); height: parent.rh; color: Qt.rgba(0, 0, 0, 0.44) }
-      Rectangle { x: parent.rx + parent.rw; y: parent.ry; width: Math.max(0, parent.width - (parent.rx + parent.rw)); height: parent.rh; color: Qt.rgba(0, 0, 0, 0.44) }
+      Rectangle { x: 0; y: 0; width: parent.width; height: Math.max(0, parent.ry); color: root.scrimColor }
+      Rectangle { x: 0; y: parent.ry + parent.rh; width: parent.width; height: Math.max(0, parent.height - (parent.ry + parent.rh)); color: root.scrimColor }
+      Rectangle { x: 0; y: parent.ry; width: Math.max(0, parent.rx); height: parent.rh; color: root.scrimColor }
+      Rectangle { x: parent.rx + parent.rw; y: parent.ry; width: Math.max(0, parent.width - (parent.rx + parent.rw)); height: parent.rh; color: root.scrimColor }
 
       // Accent frame + corner ticks around selected region.
       Rectangle {
@@ -682,8 +683,8 @@ Item {
           height: modelData.h + 2
           radius: 2
           color: isSelected
-            ? Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, 0.42)
-            : Qt.rgba(1, 1, 1, 0.14)
+            ? Util.alpha(root.accentColor, 0.42)
+            : Util.alpha(root.fgColor, 0.14)
           border.width: isSelected ? 1 : 0
           border.color: root.accentColor
         }
@@ -698,7 +699,7 @@ Item {
 
       ShapePath {
         fillColor: "transparent"
-        strokeColor: Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, 0.35)
+        strokeColor: Util.alpha(root.accentColor, 0.35)
         strokeWidth: 10
         capStyle: ShapePath.RoundCap
         joinStyle: ShapePath.RoundJoin
