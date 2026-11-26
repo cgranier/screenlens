@@ -361,11 +361,22 @@ def detect_default_agent() -> str:
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
-def build_agent_cli_command(agent: str, full_prompt: str) -> list[str] | None:
+def build_agent_cli_command(agent: str, full_prompt: str, model: str = "") -> list[str] | None:
     if agent == "claude":
         return [
             "claude",
             "-p",
+            "--model",
+            model or "haiku",
+            "--no-session-persistence",
+            "--disable-slash-commands",
+            "--strict-mcp-config",
+            "--mcp-config",
+            '{"mcpServers":{}}',
+            "--setting-sources",
+            "",
+            "--tools",
+            "Read",
             "--add-dir",
             "/tmp",
             "--allowedTools",
@@ -414,7 +425,7 @@ def parse_claude_stream_json_line(line: str) -> tuple[str, str]:
     return "", ""
 
 
-def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict]) -> None:
+def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict], model: str = "") -> None:
     agent = detect_default_agent()
     if not agent:
         emit(
@@ -440,7 +451,7 @@ def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict
     lines.append(f"User: {user_text}")
     full_prompt = "\n\n".join(lines)
 
-    cmd = build_agent_cli_command(agent, full_prompt)
+    cmd = build_agent_cli_command(agent, full_prompt, model=model)
     if not cmd or not shutil.which(cmd[0]):
         emit(
             {
@@ -453,7 +464,8 @@ def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict
         )
         return
 
-    emit({"type": "meta", "provider": f"agent:{agent}", "model": agent, "croppedPath": saved_image_path})
+    display_model = (model or "haiku") if agent == "claude" else agent
+    emit({"type": "meta", "provider": f"agent:{agent}", "model": display_model, "croppedPath": saved_image_path})
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.DEVNULL,
@@ -539,7 +551,7 @@ def main() -> int:
         model = resolved["model"]
 
         if provider == "agent":
-            run_agent_fallback(user_text, saved_path, history)
+            run_agent_fallback(user_text, saved_path, history, model=model)
             return 0
 
         if provider == "gemini":

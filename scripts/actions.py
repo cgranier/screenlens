@@ -2,6 +2,7 @@
 """Safe clipboard copy and Omarchy agent handoff actions without shell interpolation."""
 
 import argparse
+import base64
 import json
 import os
 import shutil
@@ -10,7 +11,10 @@ import sys
 import time
 
 
-def read_payload(path: str) -> dict:
+def read_payload(path: str, b64_value: str = "") -> dict:
+    if b64_value:
+        decoded = base64.b64decode(b64_value).decode("utf-8")
+        return json.loads(decoded)
     if path == "-":
         raw = sys.stdin.readline()
         return json.loads(raw)
@@ -63,8 +67,8 @@ def build_single_line_handoff_prompt(context_path: str, crop_path: str, image_pa
     return " ".join(parts).replace("\n", " ").replace("\r", " ")
 
 
-def prepare_handoff(request_file: str) -> dict:
-    payload = read_payload(request_file)
+def prepare_handoff(request_file: str, b64_value: str = "") -> dict:
+    payload = read_payload(request_file, b64_value=b64_value)
 
     prompt = str(payload.get("prompt") or "").strip()
     image_path = str(payload.get("imagePath") or "")
@@ -134,7 +138,8 @@ def main() -> int:
     p_img.add_argument("--crop", default="")
 
     p_prep = sub.add_parser("prepare-handoff")
-    p_prep.add_argument("file")
+    p_prep.add_argument("file", nargs="?", default="-")
+    p_prep.add_argument("--b64", default="")
 
     p_handoff = sub.add_parser("handoff")
     p_handoff.add_argument("file")
@@ -145,7 +150,7 @@ def main() -> int:
     if args.cmd == "copy-image":
         return copy_image(args.image, args.crop)
     if args.cmd == "prepare-handoff":
-        print(json.dumps(prepare_handoff(args.file)), flush=True)
+        print(json.dumps(prepare_handoff(args.file, b64_value=args.b64)), flush=True)
         return 0
     if args.cmd == "handoff":
         return handoff_to_agent(args.file)

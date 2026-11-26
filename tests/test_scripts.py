@@ -146,6 +146,8 @@ class ScreenLensTests(unittest.TestCase):
         self.assertIn("--add-dir", cmd)
         self.assertIn("--allowedTools", cmd)
         self.assertIn("stream-json", cmd)
+        self.assertIn("haiku", cmd)
+        self.assertIn("--strict-mcp-config", cmd)
 
         prompt = actions_mod.build_single_line_handoff_prompt(
             "/tmp/ctx.md", "/tmp/crop.png", "/tmp/full.png", "line1\nline2\r\nline3"
@@ -155,18 +157,18 @@ class ScreenLensTests(unittest.TestCase):
         self.assertIn("/tmp/ctx.md", prompt)
         self.assertIn("/tmp/crop.png", prompt)
 
-        with tempfile.TemporaryDirectory() as tmp:
-            req_path = os.path.join(tmp, "req.json")
-            with open(req_path, "w", encoding="utf-8") as f:
-                json.dump({"prompt": "Context\nLine 2", "imagePath": "", "crop": None, "draftPrompt": "Help"}, f)
-            prepared = actions_mod.prepare_handoff(req_path)
-            try:
-                self.assertTrue(prepared["ok"])
-                self.assertTrue(os.path.isfile(prepared["contextPath"]))
-                self.assertNotIn("\n", prepared["prompt"])
-            finally:
-                if os.path.exists(prepared["contextPath"]):
-                    os.unlink(prepared["contextPath"])
+        import base64
+        b64_payload = base64.b64encode(
+            json.dumps({"prompt": "Context\nLine 2", "imagePath": "", "crop": None, "draftPrompt": "Help"}).encode("utf-8")
+        ).decode("ascii")
+        prepared = actions_mod.prepare_handoff("-", b64_value=b64_payload)
+        try:
+            self.assertTrue(prepared["ok"])
+            self.assertTrue(os.path.isfile(prepared["contextPath"]))
+            self.assertNotIn("\n", prepared["prompt"])
+        finally:
+            if os.path.exists(prepared["contextPath"]):
+                os.unlink(prepared["contextPath"])
 
     def test_qml_ui_safety_and_motion_conventions(self):
         with open(os.path.join(ROOT_DIR, "ScreenLens.qml"), "r", encoding="utf-8") as f:

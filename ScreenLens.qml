@@ -347,7 +347,12 @@ Item {
     }
   }
 
+  function encodeUtf8Base64(str) {
+    return Qt.btoa(unescape(encodeURIComponent(String(str || ""))))
+  }
+
   function handoffToAgent() {
+    if (handoffProc.running) return
     var allMsgs = root.messages.slice()
     if (root.streamingText.trim().length > 0) {
       allMsgs.push({ role: "assistant", text: root.streamingText })
@@ -362,12 +367,20 @@ Item {
       messages: allMsgs,
       draftPrompt: promptField.text
     })
-    root.pendingHandoffJson = JSON.stringify({
+    var payloadJson = JSON.stringify({
       prompt: handoffPrompt,
       imagePath: root.screenshotPath,
       crop: crop,
       draftPrompt: promptField.text
     })
+    root.showToast(strings.t("status.handoffSent"))
+    handoffProc.command = [
+      "/usr/bin/python3",
+      root.pluginDir + "/scripts/actions.py",
+      "prepare-handoff",
+      "--b64",
+      root.encodeUtf8Base64(payloadJson)
+    ]
     handoffProc.running = false
     handoffProc.running = true
   }
@@ -417,15 +430,19 @@ Item {
 
   function contextBadgeText() {
     if (root.selectedText) {
-      return strings.t("context.selectedText").arg(Commons.I18n.formatNumber(root.selectedText.length))
+      var selTpl = strings.t("context.selectedText")
+      return selTpl.indexOf("%1") !== -1
+        ? selTpl.arg(Commons.I18n.formatNumber(root.selectedText.length))
+        : ("Selected text (" + root.selectedText.length + ")")
     }
     if (root.selectionRect) {
       var crop = root.currentImageCrop()
       var w = crop ? crop.w : Math.round(root.selectionRect.w)
       var h = crop ? crop.h : Math.round(root.selectionRect.h)
-      return strings.t("context.region")
-        .arg(Commons.I18n.formatNumber(w))
-        .arg(Commons.I18n.formatNumber(h))
+      var regTpl = strings.t("context.region")
+      return regTpl.indexOf("%1") !== -1
+        ? regTpl.arg(Commons.I18n.formatNumber(w)).arg(Commons.I18n.formatNumber(h))
+        : ("Region (" + w + "×" + h + ")")
     }
     if (root.windowClass) {
       return strings.t("context.fullScreen") + " · " + root.windowClass
@@ -545,9 +562,6 @@ Item {
 
   Process {
     id: handoffProc
-    stdinEnabled: true
-    command: ["/usr/bin/python3", root.pluginDir + "/scripts/actions.py", "prepare-handoff", "-"]
-    onStarted: handoffProc.write(root.pendingHandoffJson + "\n")
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -557,8 +571,15 @@ Item {
           // Match Omarchy's first-party agents panel: detach via login shell so
           // uwsm-app / xdg-terminal-exec / foot inherit the full desktop session.
           Util.execArgv(["omarchy-agent-prompt", res.prompt])
+          root.dismiss()
+        } else {
+          root.errorMessage = strings.t("error.askFailed").arg("could not prepare agent handoff")
         }
-        root.dismiss()
+      }
+    }
+    onExited: function(code) {
+      if (code !== 0) {
+        root.errorMessage = strings.t("error.askFailed").arg("agent handoff exited " + code)
       }
     }
   }
@@ -836,6 +857,12 @@ Item {
           iconText: "󰚩"
           selected: true
           onClicked: root.runQuickChip("explain")
+        }
+
+        Ui.Button {
+          text: strings.t("action.handoff")
+          iconText: "󰆍"
+          onClicked: root.handoffToAgent()
         }
 
         Ui.Button {
