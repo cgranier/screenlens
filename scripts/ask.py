@@ -382,12 +382,13 @@ def detect_default_agent() -> str:
 
 
 def build_agent_cli_command(agent: str, full_prompt: str, model: str = "") -> list[str] | None:
+    clean_model = "" if (not model or model == "default") else model.strip()
     if agent == "claude":
         return [
             "claude",
             "-p",
             "--model",
-            model or "haiku",
+            clean_model or "haiku",
             "--no-session-persistence",
             "--disable-slash-commands",
             "--strict-mcp-config",
@@ -408,15 +409,35 @@ def build_agent_cli_command(agent: str, full_prompt: str, model: str = "") -> li
             full_prompt,
         ]
     if agent == "agy":
-        return ["agy", "-p", full_prompt]
+        cmd = ["agy"]
+        if clean_model:
+            cmd.extend(["--model", clean_model])
+        cmd.extend(["-p", full_prompt])
+        return cmd
     if agent == "codex":
-        return ["codex", "exec", full_prompt]
+        cmd = ["codex", "exec"]
+        if clean_model:
+            cmd.extend(["-m", clean_model])
+        cmd.append(full_prompt)
+        return cmd
     if agent == "opencode":
-        return ["opencode", "run", full_prompt]
+        cmd = ["opencode", "run"]
+        if clean_model:
+            cmd.extend(["-m", clean_model])
+        cmd.append(full_prompt)
+        return cmd
     if agent == "gemini":
-        return ["gemini", "-p", full_prompt]
+        cmd = ["gemini"]
+        if clean_model:
+            cmd.extend(["-m", clean_model])
+        cmd.extend(["-p", full_prompt])
+        return cmd
     if agent == "grok":
-        return ["grok", "-p", full_prompt]
+        cmd = ["grok"]
+        if clean_model:
+            cmd.extend(["-m", clean_model])
+        cmd.extend(["-p", full_prompt])
+        return cmd
     return None
 
 
@@ -557,13 +578,14 @@ def main() -> int:
     selected_text = str(req_data.get("selectedText") or "")
     window_info = req_data.get("windowInfo")
     history = req_data.get("history") or []
+    task = str(req_data.get("task") or "general").strip().lower()
 
     config = load_config()
     max_dim = int(config.get("maxImageDim") or 1920)
     max_dim = max(512, min(3840, max_dim))
 
     try:
-        resolved = resolve_provider(config)
+        resolved = resolve_provider(config, task=task)
         img_bytes, mime, saved_path = prepare_image(image_path, crop, max_dim=max_dim)
         image_b64 = base64.b64encode(img_bytes).decode("ascii") if img_bytes else ""
         user_text = compose_user_text(prompt, selected_text, window_info, has_crop=bool(crop))

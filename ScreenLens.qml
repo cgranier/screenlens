@@ -203,7 +203,14 @@ Item {
 
   // ---------------------------------------------------------------- actions
 
-  function submitPrompt(overridePrompt) {
+  function inferTask(explicitTask) {
+    if (explicitTask) return explicitTask
+    if (root.selectedText && !root.selectionRect) return "text"
+    if (root.selectionRect) return "vision"
+    return "general"
+  }
+
+  function submitPrompt(overridePrompt, explicitTask) {
     var text = String(overridePrompt !== undefined ? overridePrompt : promptField.text).trim()
     if (!text) return
     if (root.streaming) {
@@ -224,6 +231,7 @@ Item {
 
     var payload = {
       prompt: text,
+      task: root.inferTask(explicitTask),
       imagePath: root.screenshotPath,
       crop: root.currentImageCrop(),
       selectedText: root.selectedText,
@@ -279,11 +287,11 @@ Item {
 
   function runQuickChip(kind) {
     if (kind === "explain") {
-      root.submitPrompt("Explain what is shown here clearly and concisely.")
+      root.submitPrompt("Explain what is shown here clearly and concisely.", root.inferTask(""))
     } else if (kind === "summarize") {
-      root.submitPrompt("Summarize the key points shown here in concise bullets.")
+      root.submitPrompt("Summarize the key points shown here in concise bullets.", root.inferTask(""))
     } else if (kind === "translate") {
-      root.submitPrompt("Translate any visible text here into English. If it is already in English, briefly clarify any jargon or idioms.")
+      root.submitPrompt("Translate any visible text here into English. If it is already in English, briefly clarify any jargon or idioms.", "translate")
     } else if (kind === "extract") {
       root.extractAndCopyText()
     }

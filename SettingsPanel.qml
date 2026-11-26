@@ -30,6 +30,7 @@ Ui.Panel {
   // Live config state loaded from 0600 ~/.config/omarchy/screenlens.json
   property var config: ({})
   property var catalog: ({})
+  property string omarchyDefaultAgent: ""
   property string keybindDraft: "SUPER + ALT + A"
   property bool rebindExisting: false
   property bool busy: false
@@ -132,7 +133,31 @@ Ui.Panel {
     return (root.catalog && root.catalog[root.selectedProvider]) ? root.catalog[root.selectedProvider] : ({})
   }
 
+  function effectiveAgentCli(cliValue) {
+    var c = String(cliValue || "default").trim().toLowerCase()
+    if (c && c !== "default") return c
+    return root.omarchyDefaultAgent || "claude"
+  }
+
+  function agentModelsForCli(cliValue) {
+    var eff = root.effectiveAgentCli(cliValue)
+    var liveKey = "agent:" + eff
+    var live = root.discoveredModels[liveKey]
+    if (Array.isArray(live) && live.length > 0) return live.slice()
+    var meta = (root.catalog && root.catalog.agent) ? root.catalog.agent : ({})
+    var byCli = meta.modelsByCli || ({})
+    if (Array.isArray(byCli[eff]) && byCli[eff].length > 0) return byCli[eff].slice()
+    return ["default"]
+  }
+
   function currentProviderModels() {
+    if (root.selectedProvider === "agent") {
+      var cliVal = String(currentProviderCfg().cli || "default")
+      var cliBase = root.agentModelsForCli(cliVal)
+      var activeAgentModel = String(currentProviderCfg().model || "")
+      if (activeAgentModel && cliBase.indexOf(activeAgentModel) === -1) cliBase.unshift(activeAgentModel)
+      return cliBase
+    }
     var live = root.discoveredModels[root.selectedProvider]
     var base = Array.isArray(live) && live.length > 0
       ? live.slice()
@@ -158,12 +183,32 @@ Ui.Panel {
     root.patchConfig(patch)
   }
 
-  function refreshModelsFor(provId) {
+  function refreshModelsFor(provId, cliOverride) {
     if (root.refreshingModels) return
     root.refreshingModels = true
-    listModelsProc.command = ["/usr/bin/python3", root.pluginDir + "/scripts/providers.py", "list-models", provId]
+    var cmd = ["/usr/bin/python3", root.pluginDir + "/scripts/providers.py", "list-models", provId]
+    if (provId === "agent") {
+      var cliArg = cliOverride || String(currentProviderCfg().cli || "default")
+      cmd.push("--cli")
+      cmd.push(cliArg)
+    }
+    listModelsProc.command = cmd
     listModelsProc.running = false
     listModelsProc.running = true
+  }
+
+  function selectAgentCli(nextCli) {
+    var nextModels = root.agentModelsForCli(nextCli)
+    var curModel = String(currentProviderCfg().model || "")
+    var fields = { cli: nextCli }
+    if (curModel && nextModels.indexOf(curModel) === -1) {
+      fields.model = "default"
+    }
+    root.saveProviderField("agent", fields)
+    var eff = root.effectiveAgentCli(nextCli)
+    if ((eff === "agy" || eff === "opencode" || eff === "grok") && !root.discoveredModels["agent:" + eff]) {
+      root.refreshModelsFor("agent", nextCli)
+    }
   }
 
   function testSelectedProvider() {
@@ -214,16 +259,55 @@ Ui.Panel {
     return (p.model || "") + " · " + keyBadge
   }
 
-  function taskSummary(taskKey) {
+  function taskEntry(taskKey) {
     var routing = (root.config && root.config.taskRouting) ? root.config.taskRouting : ({})
-    if (taskKey === "handoffAgent") {
-      return String(routing.handoffAgent || "default")
+    return (routing[taskKey] && typeof routing[taskKey] === "object") ? routing[taskKey] : ({})
+  }
+
+  function taskProviderValue(taskKey) {
+    return String(taskEntry(taskKey).provider || "")
+  }
+
+  function taskModelValue(taskKey) {
+    return String(taskEntry(taskKey).model || "")
+  }
+
+  function taskModelOptions(taskKey) {
+    var opts = [{ value: "", label: strings.t("settings.providerDefault") }]
+    var prov = taskProviderValue(taskKey)
+    if (!prov || prov === "auto") prov = String(root.cfgVal("defaultProvider", "auto"))
+    if (prov === "auto") return opts
+    var list = []
+    if (prov === "agent") {
+      var agentCli = (root.config && root.config.providers && root.config.providers.agent)
+        ? String(root.config.providers.agent.cli || "default")
+        : "default"
+      list = root.agentModelsForCli(agentCli)
+    } else {
+      var live = root.discoveredModels[prov]
+      var meta = (root.catalog && root.catalog[prov]) ? root.catalog[prov] : ({})
+      list = Array.isArray(live) && live.length > 0
+        ? live
+        : (Array.isArray(meta.models) ? meta.models : [])
     }
-    var entry = routing[taskKey] || ({})
-    var prov = String(entry.provider || "")
-    var mod = String(entry.model || "")
-    if (!prov && !mod) return strings.t("settings.useDefault")
-    return (prov || "auto") + (mod ? (" · " + mod) : "")
+    for (var i = 0; i < list.length; i++) {
+      opts.push({ value: String(list[i]), label: String(list[i]) })
+    }
+    var current = taskModelValue(taskKey)
+    if (current) {
+      var found = false
+      for (var j = 0; j < opts.length; j++) {
+        if (opts[j].value === current) { found = true; break }
+      }
+      if (!found) opts.push({ value: current, label: current })
+    }
+    return opts
+  }
+
+  function saveTaskRouting(taskKey, fields) {
+    var patch = { taskRouting: {} }
+    patch.taskRouting[taskKey] = fields
+    root.patchConfig(patch)
   }
 
   Timer {
@@ -263,6 +347,7 @@ Ui.Panel {
         try { res = JSON.parse(text) } catch (e) { res = null }
         if (res && res.ok && res.providers) {
           root.catalog = res.providers
+          root.omarchyDefaultAgent = String(res.defaultAgent || "")
         }
       }
     }
@@ -299,7 +384,10 @@ Ui.Panel {
         try { res = JSON.parse(text) } catch (e) { res = null }
         if (res && res.ok && res.provider && Array.isArray(res.models)) {
           var next = Object.assign({}, root.discoveredModels)
-          next[res.provider] = res.models
+          var cacheKey = (res.provider === "agent" && res.effectiveCli)
+            ? ("agent:" + res.effectiveCli)
+            : res.provider
+          next[cacheKey] = res.models
           root.discoveredModels = next
           root.setStatus(
             res.note ? res.note : strings.t("settings.modelsRefreshed").arg(String(res.models.length)),
@@ -1000,7 +1088,7 @@ Ui.Panel {
                       fontSize: Style.font.caption
                       bordered: true
                       selected: String(root.currentProviderCfg().cli || "default") === modelData
-                      onClicked: root.saveProviderField("agent", { cli: modelData })
+                      onClicked: root.selectAgentCli(modelData)
                     }
                   }
                 }
@@ -1047,49 +1135,132 @@ Ui.Panel {
             }
           }
 
-          Repeater {
-            model: [
-              { key: "general", label: strings.t("settings.task.general") },
-              { key: "vision", label: strings.t("settings.task.vision") },
-              { key: "text", label: strings.t("settings.task.text") },
-              { key: "translate", label: strings.t("settings.task.translate") },
-              { key: "handoffAgent", label: strings.t("settings.task.handoff") }
-            ]
-            delegate: Rectangle {
+          readonly property bool taskRoutingOn: !!(root.config && root.config.taskRouting && root.config.taskRouting.enabled)
+
+          Column {
+            width: parent.width
+            spacing: Style.spacing.xs
+            opacity: parent.taskRoutingOn ? 1.0 : 0.48
+            enabled: parent.taskRoutingOn
+
+            Repeater {
+              model: [
+                { key: "general", label: strings.t("settings.task.general") },
+                { key: "vision", label: strings.t("settings.task.vision") },
+                { key: "text", label: strings.t("settings.task.text") },
+                { key: "translate", label: strings.t("settings.task.translate") }
+              ]
+              delegate: Rectangle {
+                width: panelColumn.width
+                radius: Math.min(4, root.cornerRadius)
+                color: Util.alpha(root.fgColor, 0.05)
+                border.width: 1
+                border.color: Util.alpha(root.fgColor, 0.14)
+                implicitHeight: taskCardCol.implicitHeight + Style.spacing.sm * 2
+
+                Column {
+                  id: taskCardCol
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.top: parent.top
+                  anchors.margins: Style.spacing.sm
+                  spacing: Style.spacing.xs
+
+                  PlainText {
+                    text: modelData.label
+                    color: root.fgColor
+                    font.family: root.uiFont
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: true
+                  }
+
+                  Row {
+                    id: taskPickRow
+                    width: parent.width
+                    spacing: Style.spacing.xs
+
+                    Ui.Dropdown {
+                      width: (taskPickRow.width - taskPickRow.spacing) * 0.44
+                      showLabel: false
+                      value: root.taskProviderValue(modelData.key)
+                      options: [
+                        { value: "", label: strings.t("settings.useDefault") },
+                        { value: "auto", label: "Auto" },
+                        { value: "gemini", label: "Gemini" },
+                        { value: "anthropic", label: "Claude" },
+                        { value: "openai", label: "OpenAI" },
+                        { value: "ollama", label: "Ollama" },
+                        { value: "agent", label: "CLI Agent" }
+                      ]
+                      foreground: root.fgColor
+                      background: root.bgColor
+                      accent: root.accentColor
+                      onChanged: function(nextProv) {
+                        root.saveTaskRouting(modelData.key, { provider: nextProv, model: "" })
+                      }
+                    }
+
+                    Ui.Dropdown {
+                      width: (taskPickRow.width - taskPickRow.spacing) * 0.56
+                      showLabel: false
+                      value: root.taskModelValue(modelData.key)
+                      options: root.taskModelOptions(modelData.key)
+                      foreground: root.fgColor
+                      background: root.bgColor
+                      accent: root.accentColor
+                      onChanged: function(nextMod) {
+                        root.saveTaskRouting(modelData.key, { model: nextMod })
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
+            // Continue in Agent CLI target
+            Rectangle {
               width: panelColumn.width
               radius: Math.min(4, root.cornerRadius)
               color: Util.alpha(root.fgColor, 0.05)
               border.width: 1
               border.color: Util.alpha(root.fgColor, 0.14)
-              implicitHeight: taskRow.implicitHeight + Style.spacing.xs * 2
+              implicitHeight: handoffCardCol.implicitHeight + Style.spacing.sm * 2
 
-              Item {
-                id: taskRow
+              Column {
+                id: handoffCardCol
                 anchors.left: parent.left
                 anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
+                anchors.top: parent.top
                 anchors.margins: Style.spacing.sm
-                implicitHeight: Math.max(taskTitle.implicitHeight, taskVal.implicitHeight)
+                spacing: Style.spacing.xs
 
                 PlainText {
-                  id: taskTitle
-                  anchors.left: parent.left
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: modelData.label
+                  text: strings.t("settings.task.handoff")
                   color: root.fgColor
                   font.family: root.uiFont
                   font.pixelSize: Style.font.bodySmall
                   font.bold: true
                 }
 
-                PlainText {
-                  id: taskVal
-                  anchors.right: parent.right
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: root.taskSummary(modelData.key)
-                  color: root.accentColor
-                  font.family: root.uiFont
-                  font.pixelSize: Style.font.caption
+                Ui.Dropdown {
+                  width: parent.width
+                  showLabel: false
+                  value: String((root.config && root.config.taskRouting && root.config.taskRouting.handoffAgent) || "default")
+                  options: [
+                    { value: "default", label: strings.t("settings.handoffDefault") },
+                    { value: "claude", label: "claude" },
+                    { value: "codex", label: "codex" },
+                    { value: "agy", label: "agy" },
+                    { value: "opencode", label: "opencode" },
+                    { value: "grok", label: "grok" },
+                    { value: "gemini", label: "gemini" }
+                  ]
+                  foreground: root.fgColor
+                  background: root.bgColor
+                  accent: root.accentColor
+                  onChanged: function(nextCli) {
+                    root.patchConfig({ taskRouting: { handoffAgent: nextCli } })
+                  }
                 }
               }
             }

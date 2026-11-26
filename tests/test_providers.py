@@ -83,6 +83,22 @@ class ProviderToolsTests(unittest.TestCase):
             self.assertEqual(ok_res["detail"], "Connected")
             self.assertIsInstance(ok_res["latencyMs"], int)
 
+    def test_agent_models_are_scoped_per_cli(self):
+        agy_sample = "Fetching available models...\ngemini-4-neon-high\tGemini 4 Neon (High)\nclaude-sonnet-5-5-medium\tClaude Sonnet 5.5\n"
+        self.assertEqual(
+            providers_mod.parse_agy_models_output(agy_sample),
+            ["gemini-4-neon-high", "claude-sonnet-5-5-medium"],
+        )
+
+        # Offline agy should NOT show Claude's haiku/sonnet/opus aliases.
+        agy_offline = providers_mod.discover_models("agent", {}, live=False, cli_override="agy")
+        self.assertEqual(agy_offline["effectiveCli"], "agy")
+        self.assertEqual(agy_offline["models"], ["default"])
+        self.assertNotIn("haiku", agy_offline["models"])
+
+        claude_offline = providers_mod.discover_models("agent", {}, live=False, cli_override="claude")
+        self.assertIn("haiku", claude_offline["models"])
+
 
 if __name__ == "__main__":
     unittest.main()

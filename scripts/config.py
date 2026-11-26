@@ -78,12 +78,16 @@ PROVIDER_CATALOG = {
         "requiresKey": False,
         "keyUrl": "",
         "envVars": [],
-        "models": [
-            "haiku",
-            "sonnet",
-            "opus",
-        ],
-        "defaultModel": "haiku",
+        "models": ["default"],
+        "modelsByCli": {
+            "claude": ["default", "haiku", "sonnet", "opus"],
+            "agy": ["default"],
+            "codex": ["default", "gpt-5", "gpt-4.1"],
+            "opencode": ["default"],
+            "grok": ["default"],
+            "gemini": ["default", "gemini-2.5-flash", "gemini-2.5-pro"],
+        },
+        "defaultModel": "default",
         "clis": ["default", "claude", "codex", "agy", "opencode", "grok", "gemini"],
     },
 }
@@ -398,7 +402,13 @@ def main() -> int:
             return 0
 
         if args.cmd == "catalog":
-            print(json.dumps({"ok": True, "providers": PROVIDER_CATALOG}), flush=True)
+            default_agent = ""
+            default_bin = shutil.which("omarchy-default-agent")
+            if default_bin:
+                proc = subprocess.run([default_bin], capture_output=True, text=True, timeout=5)
+                if proc.returncode == 0:
+                    default_agent = proc.stdout.strip()
+            print(json.dumps({"ok": True, "providers": PROVIDER_CATALOG, "defaultAgent": default_agent}), flush=True)
             return 0
 
         if args.cmd == "patch":

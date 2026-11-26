@@ -113,6 +113,44 @@ class ScreenLensTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             ask_mod.validate_ollama_host("http://evil.example.com:11434")
 
+    def test_task_routing_and_handoff_agent_override(self):
+        cfg = {
+            "defaultProvider": "anthropic",
+            "providers": {
+                "anthropic": {"apiKey": "ant-key", "model": "claude-haiku-4-5-20251001"},
+                "gemini": {"apiKey": "gem-key", "model": "gemini-2.5-flash"},
+                "openai": {"apiKey": "oai-key", "model": "gpt-4.1-mini"},
+            },
+            "taskRouting": {
+                "enabled": True,
+                "translate": {"provider": "gemini", "model": "gemini-2.5-flash-lite"},
+                "vision": {"provider": "openai", "model": ""},
+                "general": {"provider": "", "model": ""},
+                "handoffAgent": "codex",
+            },
+        }
+        tr = ask_mod.resolve_provider(cfg, env={}, task="translate")
+        self.assertEqual(tr["provider"], "gemini")
+        self.assertEqual(tr["model"], "gemini-2.5-flash-lite")
+
+        vis = ask_mod.resolve_provider(cfg, env={}, task="vision")
+        self.assertEqual(vis["provider"], "openai")
+        self.assertEqual(vis["model"], "gpt-4.1-mini")
+
+        gen = ask_mod.resolve_provider(cfg, env={}, task="general")
+        self.assertEqual(gen["provider"], "anthropic")
+
+        # When disabled, taskRouting is ignored.
+        cfg_off = dict(cfg, taskRouting=dict(cfg["taskRouting"], enabled=False))
+        self.assertEqual(ask_mod.resolve_provider(cfg_off, env={}, task="translate")["provider"], "anthropic")
+
+        # Explicit handoff CLI command construction.
+        default_cmd = actions_mod.build_handoff_launch_cmd("hello", "default")
+        self.assertTrue(default_cmd[0].endswith("omarchy-agent-prompt"))
+        codex_cmd = actions_mod.build_handoff_launch_cmd("hello", "codex")
+        self.assertIn("codex", codex_cmd)
+        self.assertIn("--approve-for-me", codex_cmd)
+
     def test_sse_and_ndjson_parsers(self):
         gem_line = 'data: {"candidates":[{"content":{"parts":[{"text":"Hello "},{"text":"world"}]}}]}'
         self.assertEqual(ask_mod.parse_gemini_sse_line(gem_line), "Hello world")

@@ -74,7 +74,34 @@ def list_installed_clis() -> list[str]:
     return found
 
 
-def discover_models(provider: str, cfg: dict, live: bool = True, env: dict | None = None) -> dict:
+def parse_agy_models_output(raw: str) -> list[str]:
+    models: list[str] = []
+    for line in raw.splitlines():
+        s = line.strip()
+        if not s or s.lower().startswith("fetching"):
+            continue
+        if "\t" in line:
+            mid = line.split("\t", 1)[0].strip()
+        else:
+            mid = s.split()[0].strip()
+        if mid and not mid.startswith("-") and "/" not in mid:
+            models.append(mid)
+    return dedupe_preserve(models)
+
+
+def resolve_effective_cli(cli: str) -> str:
+    chosen = str(cli or "default").strip().lower()
+    if chosen and chosen != "default":
+        return chosen
+    default_bin = shutil.which("omarchy-default-agent")
+    if default_bin:
+        proc = subprocess.run([default_bin], capture_output=True, text=True, timeout=5)
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip()
+    return "claude"
+
+
+def discover_models(provider: str, cfg: dict, live: bool = True, env: dict | None = None, cli_override: str = "") -> dict:
     meta = PROVIDER_CATALOG.get(provider)
     if not meta:
         return {"ok": False, "error": f"Unknown provider: {provider}"}
@@ -84,14 +111,37 @@ def discover_models(provider: str, cfg: dict, live: bool = True, env: dict | Non
     note = ""
 
     if provider == "agent":
-        return {
+        prov_cfg = (cfg.get("providers") or {}).get("agent") or {}
+        cli_setting = cli_override or str(prov_cfg.get("cli") or "default")
+        effective_cli = resolve_effective_cli(cli_setting)
+        cli_map = meta.get("modelsByCli") or {}
+        cli_models = list(cli_map.get(effective_cli) or ["default"])
+        source = "curated"
+
+        if live and effective_cli in ("agy", "opencode", "grok") and shutil.which(effective_cli):
+            try:
+                proc = subprocess.run([effective_cli, "models"], capture_output=True, text=True, timeout=10)
+                if proc.returncode == 0:
+                    parsed = parse_agy_models_output(proc.stdout)
+                    if parsed:
+                        cli_models = dedupe_preserve(["default"] + parsed)
+                        source = "live"
+            except Exception as exc:
+                note = f"Could not fetch {effective_cli} models: {exc}"
+
+        out = {
             "ok": True,
             "provider": provider,
-            "models": curated,
+            "cli": cli_setting,
+            "effectiveCli": effective_cli,
+            "models": cli_models,
             "clis": PROVIDER_CATALOG["agent"]["clis"],
             "installedClis": list_installed_clis(),
-            "source": "local",
+            "source": source,
         }
+        if note:
+            out["note"] = note
+        return out
 
     if not live:
         return {"ok": True, "provider": provider, "models": curated, "source": "curated"}
@@ -249,6 +299,7 @@ def main() -> int:
 
     p_list = sub.add_parser("list-models")
     p_list.add_argument("provider")
+    p_list.add_argument("--cli", default="")
     p_list.add_argument("--offline", action="store_true")
 
     p_test = sub.add_parser("test")
@@ -262,7 +313,7 @@ def main() -> int:
 
     try:
         if args.cmd == "list-models":
-            print(json.dumps(discover_models(args.provider, cfg, live=not args.offline)), flush=True)
+            print(json.dumps(discover_models(args.provider, cfg, live=not args.offline, cli_override=args.cli)), flush=True)
             return 0
         if args.cmd == "test":
             res = test_provider(args.provider, cfg)

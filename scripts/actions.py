@@ -172,6 +172,49 @@ def notify_error(message: str) -> None:
         subprocess.run([notifier, "ScreenLens", message[:300]], check=False, timeout=5)
 
 
+def build_handoff_launch_cmd(single_line_prompt: str, agent_override: str = "default") -> list[str]:
+    agent = str(agent_override or "default").strip().lower()
+    if not agent or agent == "default":
+        agent_prompt_bin = shutil.which("omarchy-agent-prompt") or "/usr/share/omarchy/bin/omarchy-agent-prompt"
+        return [agent_prompt_bin, single_line_prompt]
+
+    launch_tui = shutil.which("omarchy-launch-tui") or "/usr/share/omarchy/bin/omarchy-launch-tui"
+    if agent == "claude":
+        agent_cmd = ["claude", "--permission-mode", "auto", "--", single_line_prompt]
+    elif agent == "agy":
+        agent_cmd = ["agy", "--dangerously-skip-permissions", "--prompt-interactive", single_line_prompt]
+    elif agent == "codex":
+        agent_cmd = ["codex", "--approve-for-me", "--", single_line_prompt]
+    elif agent == "opencode":
+        agent_cmd = ["opencode", "--auto", "--prompt", single_line_prompt]
+    elif agent == "grok":
+        agent_cmd = ["grok", "--permission-mode", "bypassPermissions", "--", single_line_prompt]
+    elif agent == "gemini":
+        agent_cmd = ["gemini", "-i", single_line_prompt]
+    else:
+        agent_prompt_bin = shutil.which("omarchy-agent-prompt") or "/usr/share/omarchy/bin/omarchy-agent-prompt"
+        return [agent_prompt_bin, single_line_prompt]
+    return [launch_tui, "--app-id=org.omarchy.agent", *agent_cmd]
+
+
+def resolve_handoff_agent() -> str:
+    try:
+        scripts_dir = os.path.dirname(os.path.abspath(__file__))
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        from config import load_config as load_sl_config
+
+        cfg = load_sl_config()
+        routing = cfg.get("taskRouting") or {}
+        if routing.get("enabled"):
+            chosen = str(routing.get("handoffAgent") or "default").strip().lower()
+            if chosen:
+                return chosen
+    except Exception:
+        pass
+    return "default"
+
+
 def handoff_direct(args: argparse.Namespace, dry_run: bool = False) -> dict | int:
     crop = None
     if args.crop:
@@ -217,14 +260,22 @@ def handoff_direct(args: argparse.Namespace, dry_run: bool = False) -> dict | in
         ctx_file.write(md + "\n")
 
     single_line_prompt = build_single_line_handoff_prompt(context_path, crop_path, args.image, args.draft)
+    handoff_agent = resolve_handoff_agent()
+    launch_cmd = build_handoff_launch_cmd(single_line_prompt, agent_override=handoff_agent)
     if dry_run:
-        return {"ok": True, "prompt": single_line_prompt, "contextPath": context_path, "cropPath": crop_path}
+        return {
+            "ok": True,
+            "prompt": single_line_prompt,
+            "contextPath": context_path,
+            "cropPath": crop_path,
+            "handoffAgent": handoff_agent,
+            "launchCmd": launch_cmd,
+        }
 
-    agent_prompt_bin = shutil.which("omarchy-agent-prompt") or "/usr/share/omarchy/bin/omarchy-agent-prompt"
-    if not os.path.isfile(agent_prompt_bin):
-        notify_error("Could not find omarchy-agent-prompt.")
+    if not os.path.isfile(launch_cmd[0]) and not shutil.which(launch_cmd[0]):
+        notify_error(f"Could not find {launch_cmd[0]}.")
         return 1
-    os.execvp(agent_prompt_bin, [agent_prompt_bin, single_line_prompt])
+    os.execvp(launch_cmd[0], launch_cmd)
     return 0
 
 

@@ -81,6 +81,8 @@
   "settings.testOk": "%1 (%2ms)",
   "settings.enableTaskRouting": "Customize provider/model per task",
   "settings.useDefault": "Use default",
+  "settings.providerDefault": "Provider default",
+  "settings.handoffDefault": "Omarchy default agent",
   "settings.task.general": "General / Explain",
   "settings.task.vision": "Vision / Region",
   "settings.task.text": "Selected Text",
