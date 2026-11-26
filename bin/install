@@ -1,0 +1,34 @@
+#!/bin/bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+PLUGIN_ID=$(jq -r '.id' "$ROOT_DIR/manifest.json")
+TARGET_DIR="$HOME/.config/omarchy/plugins/$PLUGIN_ID"
+
+omarchy plugin validate "$ROOT_DIR"
+
+mkdir -p "$HOME/.config/omarchy/plugins"
+rm -rf "$TARGET_DIR"
+mkdir -p "$TARGET_DIR"
+
+cp "$ROOT_DIR/manifest.json" "$TARGET_DIR/"
+cp "$ROOT_DIR/ScreenLens.qml" "$TARGET_DIR/"
+cp "$ROOT_DIR/PlainText.qml" "$TARGET_DIR/"
+cp "$ROOT_DIR/ScreenLensLogic.js" "$TARGET_DIR/"
+cp -R "$ROOT_DIR/scripts" "$TARGET_DIR/"
+cp -R "$ROOT_DIR/i18n" "$TARGET_DIR/"
+chmod +x "$TARGET_DIR"/scripts/*.py
+
+omarchy plugin validate "$TARGET_DIR"
+omarchy-shell shell rescanPlugins >/dev/null
+
+# Wait briefly for rescan before enabling
+for _ in $(seq 1 30); do
+  if omarchy plugin list --json | jq -e --arg id "$PLUGIN_ID" 'any(.[]; .id == $id)' >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.1
+done
+
+omarchy plugin enable "$PLUGIN_ID"
+echo "Installed and enabled $PLUGIN_ID at $TARGET_DIR"

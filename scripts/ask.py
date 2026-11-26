@@ -1,0 +1,565 @@
+#!/usr/bin/env python3
+"""Hybrid Vision streaming backend for ScreenLens.
+
+Supports direct streaming Vision APIs (Gemini, Anthropic, OpenAI, Ollama) for
+1-2s responses, with automatic fallback to Omarchy's default CLI agent when no
+direct API key is configured. Emits NDJSON events to stdout.
+"""
+
+import argparse
+import base64
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+CONFIG_PATH = os.path.expanduser("~/.config/omarchy/screenlens.json")
+MAX_RESPONSE_CHARS = 65536
+MAX_HISTORY_TURNS = 10
+SOCKET_TIMEOUT = 45
+
+SYSTEM_PROMPT = (
+    "You are ScreenLens, a fast on-screen desktop assistant for Omarchy Linux. "
+    "Answer concisely, accurately, and directly about what is shown in the screenshot "
+    "or selected text. Use plain, readable formatting without unnecessary preamble."
+)
+
+DEFAULT_MODELS = {
+    "gemini": "gemini-2.5-flash",
+    "anthropic": "claude-haiku-4-5-20251001",
+    "openai": "gpt-4.1-mini",
+    "ollama": "llama3.2-vision",
+}
+
+
+def emit(event: dict) -> None:
+    print(json.dumps(event, ensure_ascii=False), flush=True)
+
+
+def load_config(path: str = CONFIG_PATH) -> dict:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def validate_ollama_host(host: str) -> str:
+    parsed = urllib.parse.urlparse(host.strip())
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("ollamaHost must use http or https")
+    if parsed.scheme == "http" and parsed.hostname not in ("127.0.0.1", "localhost", "::1"):
+        raise ValueError("http ollamaHost is restricted to localhost; use https for remote hosts")
+    return host.rstrip("/")
+
+
+def resolve_provider(config: dict, env: dict | None = None) -> dict:
+    env_map = os.environ if env is None else env
+    preferred = str(config.get("provider") or "auto").strip().lower()
+    explicit_model = str(config.get("model") or "").strip()
+    explicit_key = str(config.get("apiKey") or "").strip()
+
+    gemini_key = str(config.get("geminiApiKey") or env_map.get("GEMINI_API_KEY") or env_map.get("GOOGLE_API_KEY") or "").strip()
+    anthropic_key = str(config.get("anthropicApiKey") or env_map.get("ANTHROPIC_API_KEY") or "").strip()
+    openai_key = str(config.get("openaiApiKey") or env_map.get("OPENAI_API_KEY") or "").strip()
+    ollama_host = str(config.get("ollamaHost") or env_map.get("OLLAMA_HOST") or "").strip()
+
+    if preferred == "gemini":
+        return {"provider": "gemini", "model": explicit_model or DEFAULT_MODELS["gemini"], "apiKey": explicit_key or gemini_key}
+    if preferred == "anthropic":
+        return {"provider": "anthropic", "model": explicit_model or DEFAULT_MODELS["anthropic"], "apiKey": explicit_key or anthropic_key}
+    if preferred == "openai":
+        return {"provider": "openai", "model": explicit_model or DEFAULT_MODELS["openai"], "apiKey": explicit_key or openai_key}
+    if preferred == "ollama":
+        host = validate_ollama_host(ollama_host or "http://127.0.0.1:11434")
+        return {"provider": "ollama", "model": explicit_model or str(config.get("ollamaModel") or DEFAULT_MODELS["ollama"]), "host": host}
+    if preferred == "agent":
+        return {"provider": "agent", "model": explicit_model}
+
+    # Auto-detection order: fastest direct Vision APIs first, then Ollama, then Omarchy default agent.
+    if gemini_key:
+        return {"provider": "gemini", "model": explicit_model or DEFAULT_MODELS["gemini"], "apiKey": gemini_key}
+    if anthropic_key:
+        return {"provider": "anthropic", "model": explicit_model or DEFAULT_MODELS["anthropic"], "apiKey": anthropic_key}
+    if openai_key:
+        return {"provider": "openai", "model": explicit_model or DEFAULT_MODELS["openai"], "apiKey": openai_key}
+    if ollama_host:
+        return {"provider": "ollama", "model": explicit_model or str(config.get("ollamaModel") or DEFAULT_MODELS["ollama"]), "host": validate_ollama_host(ollama_host)}
+    return {"provider": "agent", "model": explicit_model}
+
+
+def prepare_image(image_path: str, crop: dict | None, max_dim: int = 1920) -> tuple[bytes, str, str]:
+    """Return (image_bytes, mime_type, saved_path_for_agent)."""
+    if not image_path or not os.path.isfile(image_path):
+        return b"", "", ""
+
+    saved_path = image_path
+    use_crop = (
+        isinstance(crop, dict)
+        and int(crop.get("w", 0)) > 0
+        and int(crop.get("h", 0)) > 0
+    )
+
+    if use_crop:
+        x = max(0, int(crop["x"]))
+        y = max(0, int(crop["y"]))
+        w = max(1, int(crop["w"]))
+        h = max(1, int(crop["h"]))
+        saved_path = f"/tmp/omarchy-screenlens-crop-{os.getuid()}-{int(time.time() * 1000)}-{os.getpid()}.png"
+        fd = os.open(saved_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.close(fd)
+        cmd = ["magick", image_path, "-crop", f"{w}x{h}+{x}+{y}", "+repage"]
+        if max(w, h) > max_dim:
+            cmd.extend(["-resize", f"{max_dim}x{max_dim}>"])
+        cmd.append(saved_path)
+        proc = subprocess.run(cmd, capture_output=True, timeout=15)
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr.decode("utf-8", "replace").strip() or "failed to crop image")
+        with open(saved_path, "rb") as f:
+            return f.read(), "image/png", saved_path
+
+    # Full-screen capture: downscale & JPEG-compress in memory for low-latency Vision uploads.
+    cmd = ["magick", image_path, "-resize", f"{max_dim}x{max_dim}>", "-quality", "86", "jpeg:-"]
+    proc = subprocess.run(cmd, capture_output=True, timeout=15)
+    if proc.returncode == 0 and proc.stdout:
+        return proc.stdout, "image/jpeg", saved_path
+
+    with open(image_path, "rb") as f:
+        return f.read(), "image/png", saved_path
+
+
+def compose_user_text(prompt: str, selected_text: str, window_info: dict | None, has_crop: bool) -> str:
+    parts = []
+    if isinstance(window_info, dict):
+        cls = str(window_info.get("class") or "").strip()
+        title = str(window_info.get("title") or "").strip()
+        if cls or title:
+            label = f"{cls} — {title}" if cls and title else (cls or title)
+            parts.append(f"[Active window: {label}]")
+    if has_crop:
+        parts.append("[Attached image: cropped region selected by the user]")
+    if selected_text:
+        parts.append(f"[User highlighted text on screen:]\n{selected_text[:6000]}")
+    parts.append(prompt.strip())
+    return "\n\n".join(parts)
+
+
+def build_gemini_payload(user_text: str, image_b64: str, mime: str, history: list[dict]) -> dict:
+    contents = []
+    for idx, turn in enumerate(history[-MAX_HISTORY_TURNS:]):
+        role = "model" if turn.get("role") == "assistant" else "user"
+        text = str(turn.get("text") or "").strip()
+        if not text:
+            continue
+        parts = [{"text": text}]
+        if idx == 0 and role == "user" and image_b64:
+            parts.insert(0, {"inline_data": {"mime_type": mime, "data": image_b64}})
+        contents.append({"role": role, "parts": parts})
+
+    current_parts = [{"text": user_text}]
+    if not contents and image_b64:
+        current_parts.insert(0, {"inline_data": {"mime_type": mime, "data": image_b64}})
+    contents.append({"role": "user", "parts": current_parts})
+
+    return {
+        "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "contents": contents,
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 2048},
+    }
+
+
+def parse_gemini_sse_line(line: str) -> str:
+    if not line.startswith("data:"):
+        return ""
+    raw = line[5:].strip()
+    if not raw or raw == "[DONE]":
+        return ""
+    obj = json.loads(raw)
+    chunks = []
+    for cand in obj.get("candidates") or []:
+        content = cand.get("content") or {}
+        for part in content.get("parts") or []:
+            txt = part.get("text")
+            if isinstance(txt, str):
+                chunks.append(txt)
+    return "".join(chunks)
+
+
+def build_anthropic_payload(model: str, user_text: str, image_b64: str, mime: str, history: list[dict]) -> dict:
+    messages = []
+    for idx, turn in enumerate(history[-MAX_HISTORY_TURNS:]):
+        role = "assistant" if turn.get("role") == "assistant" else "user"
+        text = str(turn.get("text") or "").strip()
+        if not text:
+            continue
+        if idx == 0 and role == "user" and image_b64:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": mime, "data": image_b64}},
+                        {"type": "text", "text": text},
+                    ],
+                }
+            )
+        else:
+            messages.append({"role": role, "content": text})
+
+    if not messages and image_b64:
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": mime, "data": image_b64}},
+                    {"type": "text", "text": user_text},
+                ],
+            }
+        )
+    else:
+        messages.append({"role": "user", "content": user_text})
+
+    return {
+        "model": model,
+        "max_tokens": 2048,
+        "stream": True,
+        "system": SYSTEM_PROMPT,
+        "messages": messages,
+    }
+
+
+def parse_anthropic_sse_line(line: str) -> str:
+    if not line.startswith("data:"):
+        return ""
+    raw = line[5:].strip()
+    if not raw:
+        return ""
+    obj = json.loads(raw)
+    if obj.get("type") == "content_block_delta":
+        delta = obj.get("delta") or {}
+        if delta.get("type") == "text_delta":
+            return str(delta.get("text") or "")
+    return ""
+
+
+def build_openai_payload(model: str, user_text: str, image_b64: str, mime: str, history: list[dict]) -> dict:
+    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    user_seen = False
+    for turn in history[-MAX_HISTORY_TURNS:]:
+        role = "assistant" if turn.get("role") == "assistant" else "user"
+        text = str(turn.get("text") or "").strip()
+        if not text:
+            continue
+        if not user_seen and role == "user" and image_b64:
+            user_seen = True
+            messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": text},
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}},
+                    ],
+                }
+            )
+        else:
+            messages.append({"role": role, "content": text})
+
+    if not user_seen and image_b64:
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_text},
+                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}},
+                ],
+            }
+        )
+    else:
+        messages.append({"role": "user", "content": user_text})
+
+    return {"model": model, "stream": True, "max_tokens": 2048, "messages": messages}
+
+
+def parse_openai_sse_line(line: str) -> str:
+    if not line.startswith("data:"):
+        return ""
+    raw = line[5:].strip()
+    if not raw or raw == "[DONE]":
+        return ""
+    obj = json.loads(raw)
+    chunks = []
+    for choice in obj.get("choices") or []:
+        delta = choice.get("delta") or {}
+        txt = delta.get("content")
+        if isinstance(txt, str):
+            chunks.append(txt)
+    return "".join(chunks)
+
+
+def build_ollama_payload(model: str, user_text: str, image_b64: str, history: list[dict]) -> dict:
+    messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    user_seen = False
+    for turn in history[-MAX_HISTORY_TURNS:]:
+        role = "assistant" if turn.get("role") == "assistant" else "user"
+        text = str(turn.get("text") or "").strip()
+        if not text:
+            continue
+        msg: dict = {"role": role, "content": text}
+        if not user_seen and role == "user" and image_b64:
+            user_seen = True
+            msg["images"] = [image_b64]
+        messages.append(msg)
+
+    cur: dict = {"role": "user", "content": user_text}
+    if not user_seen and image_b64:
+        cur["images"] = [image_b64]
+    messages.append(cur)
+    return {"model": model, "stream": True, "messages": messages}
+
+
+def parse_ollama_ndjson_line(line: str) -> str:
+    raw = line.strip()
+    if not raw:
+        return ""
+    obj = json.loads(raw)
+    msg = obj.get("message") or {}
+    txt = msg.get("content")
+    return txt if isinstance(txt, str) else ""
+
+
+def stream_http(req: urllib.request.Request, line_parser) -> None:
+    total = 0
+    with urllib.request.urlopen(req, timeout=SOCKET_TIMEOUT) as resp:
+        for raw_line in resp:
+            line = raw_line.decode("utf-8", "replace").strip()
+            if not line:
+                continue
+            try:
+                delta = line_parser(line)
+            except json.JSONDecodeError:
+                continue
+            if not delta:
+                continue
+            remaining = MAX_RESPONSE_CHARS - total
+            if remaining <= 0:
+                break
+            chunk = delta[:remaining]
+            total += len(chunk)
+            emit({"type": "delta", "text": chunk})
+
+
+def detect_default_agent() -> str:
+    cmd = shutil.which("omarchy-default-agent")
+    if not cmd:
+        return ""
+    proc = subprocess.run([cmd], capture_output=True, text=True, timeout=5)
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def build_agent_cli_command(agent: str, full_prompt: str) -> list[str] | None:
+    if agent == "claude":
+        return ["claude", "-p", full_prompt]
+    if agent == "agy":
+        return ["agy", "-p", full_prompt]
+    if agent == "codex":
+        return ["codex", "exec", full_prompt]
+    if agent == "opencode":
+        return ["opencode", "run", full_prompt]
+    if agent == "gemini":
+        return ["gemini", "-p", full_prompt]
+    if agent == "grok":
+        return ["grok", "-p", full_prompt]
+    return None
+
+
+def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict]) -> None:
+    agent = detect_default_agent()
+    if not agent:
+        emit(
+            {
+                "type": "error",
+                "message": (
+                    "No Vision API key configured and no Omarchy default agent is set. "
+                    "Add a Gemini, Anthropic, or OpenAI key to ~/.config/omarchy/screenlens.json "
+                    "(or set GEMINI_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY), or run `omarchy default agent`."
+                ),
+            }
+        )
+        return
+
+    lines = [SYSTEM_PROMPT]
+    if saved_image_path:
+        lines.append(f"Inspect the screenshot image file at: {saved_image_path}")
+    for turn in history[-MAX_HISTORY_TURNS:]:
+        role = "Assistant" if turn.get("role") == "assistant" else "User"
+        text = str(turn.get("text") or "").strip()
+        if text:
+            lines.append(f"{role}: {text}")
+    lines.append(f"User: {user_text}")
+    full_prompt = "\n\n".join(lines)
+
+    cmd = build_agent_cli_command(agent, full_prompt)
+    if not cmd or not shutil.which(cmd[0]):
+        emit(
+            {
+                "type": "error",
+                "message": (
+                    f"Direct Vision API key not set, and CLI agent '{agent}' does not support inline streaming here. "
+                    "Add an API key to ~/.config/omarchy/screenlens.json or click 'Continue in Agent'."
+                ),
+            }
+        )
+        return
+
+    emit({"type": "meta", "provider": f"agent:{agent}", "model": agent, "croppedPath": saved_image_path})
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    total = 0
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        remaining = MAX_RESPONSE_CHARS - total
+        if remaining <= 0:
+            break
+        chunk = line[:remaining]
+        total += len(chunk)
+        emit({"type": "delta", "text": chunk})
+    stderr_text = proc.stderr.read().strip() if proc.stderr else ""
+    code = proc.wait()
+    if code != 0 and total == 0:
+        emit({"type": "error", "message": stderr_text or f"{agent} exited with code {code}"})
+        return
+    emit({"type": "done"})
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--request-file", default="")
+    args = parser.parse_args()
+
+    try:
+        if args.request_file:
+            with open(args.request_file, "r", encoding="utf-8") as f:
+                req_data = json.load(f)
+        else:
+            raw_line = sys.stdin.readline()
+            if not raw_line.strip():
+                raise ValueError("empty stdin")
+            req_data = json.loads(raw_line)
+    except Exception as exc:
+        emit({"type": "error", "message": f"invalid request payload: {exc}"})
+        return 1
+
+    prompt = str(req_data.get("prompt") or "").strip()
+    if not prompt:
+        emit({"type": "error", "message": "prompt is empty"})
+        return 1
+
+    image_path = str(req_data.get("imagePath") or "")
+    crop = req_data.get("crop")
+    selected_text = str(req_data.get("selectedText") or "")
+    window_info = req_data.get("windowInfo")
+    history = req_data.get("history") or []
+
+    config = load_config()
+    max_dim = int(config.get("maxImageDim") or 1920)
+    max_dim = max(512, min(3840, max_dim))
+
+    try:
+        resolved = resolve_provider(config)
+        img_bytes, mime, saved_path = prepare_image(image_path, crop, max_dim=max_dim)
+        image_b64 = base64.b64encode(img_bytes).decode("ascii") if img_bytes else ""
+        user_text = compose_user_text(prompt, selected_text, window_info, has_crop=bool(crop))
+        provider = resolved["provider"]
+        model = resolved["model"]
+
+        if provider == "agent":
+            run_agent_fallback(user_text, saved_path, history)
+            return 0
+
+        if provider == "gemini":
+            api_key = resolved.get("apiKey") or ""
+            if not api_key:
+                raise RuntimeError("Missing Gemini API key (set GEMINI_API_KEY or ~/.config/omarchy/screenlens.json)")
+            emit({"type": "meta", "provider": "gemini", "model": model, "croppedPath": saved_path})
+            safe_model = urllib.parse.quote(model, safe=".-_")
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{safe_model}:streamGenerateContent?alt=sse"
+            body = json.dumps(build_gemini_payload(user_text, image_b64, mime, history)).encode("utf-8")
+            req = urllib.request.Request(
+                url,
+                data=body,
+                headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+                method="POST",
+            )
+            stream_http(req, parse_gemini_sse_line)
+            emit({"type": "done"})
+            return 0
+
+        if provider == "anthropic":
+            api_key = resolved.get("apiKey") or ""
+            if not api_key:
+                raise RuntimeError("Missing Anthropic API key (set ANTHROPIC_API_KEY or ~/.config/omarchy/screenlens.json)")
+            emit({"type": "meta", "provider": "anthropic", "model": model, "croppedPath": saved_path})
+            body = json.dumps(build_anthropic_payload(model, user_text, image_b64, mime, history)).encode("utf-8")
+            req = urllib.request.Request(
+                "https://api.anthropic.com/v1/messages",
+                data=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                },
+                method="POST",
+            )
+            stream_http(req, parse_anthropic_sse_line)
+            emit({"type": "done"})
+            return 0
+
+        if provider == "openai":
+            api_key = resolved.get("apiKey") or ""
+            if not api_key:
+                raise RuntimeError("Missing OpenAI API key (set OPENAI_API_KEY or ~/.config/omarchy/screenlens.json)")
+            emit({"type": "meta", "provider": "openai", "model": model, "croppedPath": saved_path})
+            body = json.dumps(build_openai_payload(model, user_text, image_b64, mime, history)).encode("utf-8")
+            req = urllib.request.Request(
+                "https://api.openai.com/v1/chat/completions",
+                data=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {api_key}",
+                },
+                method="POST",
+            )
+            stream_http(req, parse_openai_sse_line)
+            emit({"type": "done"})
+            return 0
+
+        if provider == "ollama":
+            host = resolved["host"]
+            emit({"type": "meta", "provider": "ollama", "model": model, "croppedPath": saved_path})
+            body = json.dumps(build_ollama_payload(model, user_text, image_b64, history)).encode("utf-8")
+            req = urllib.request.Request(
+                f"{host}/api/chat",
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            stream_http(req, parse_ollama_ndjson_line)
+            emit({"type": "done"})
+            return 0
+
+        raise RuntimeError(f"Unsupported provider: {provider}")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:400]
+        emit({"type": "error", "message": f"HTTP {exc.code}: {detail}"})
+        return 1
+    except Exception as exc:
+        emit({"type": "error", "message": str(exc)})
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

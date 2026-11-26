@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "id": "carlos.screenlens",
+  "name": "ScreenLens",
+  "version": "1.0.0",
+  "author": "carlos",
+  "license": "MIT",
+  "description": "Circle-to-Search style on-screen AI overlay with lasso crop, OCR text selection, Superwhisper voice input, and agent handoff.",
+  "kinds": [
+    "overlay"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "overlay": "ScreenLens.qml"
+  }
+}
