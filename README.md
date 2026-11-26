@@ -4,7 +4,7 @@ An Android "Circle to Search"-style on-screen AI overlay and Settings panel plug
 
 Summon ScreenLens over any window or workspace, circle/drag a region or select on-screen OCR text, dictate or type a question, and stream fast answers directly from your preferred AI provider—or hand the entire visual context straight off to your Omarchy coding agent.
 
-> **Public Beta (`v0.9.0`):** ScreenLens is in active beta for early Omarchy testers. Bug reports and ideas are very welcome in [Issues](https://github.com/cgranier/screenlens/issues).
+> **Public Beta (`v0.9.1`):** ScreenLens is in active beta for early Omarchy testers. Bug reports and ideas are very welcome in [Issues](https://github.com/cgranier/screenlens/issues).
 
 ## Features
 
