@@ -91,4 +91,38 @@ assert.equal(sandbox.resolveThemePalette("light", sysPal).accent, "#ff9900")
 assert.equal(sandbox.resolveThemePalette("light", sysPal).background, "#f5f6fa")
 assert.equal(sandbox.resolveThemePalette("invalid", sysPal).background, "#111111")
 
+// 7. Superwhisper voice transcript deduplication (auto-paste on/off + late paste)
+assert.equal(
+  sandbox.mergeVoiceTranscript("", "", "What is this error?"),
+  "What is this error?"
+)
+assert.equal(
+  sandbox.mergeVoiceTranscript("Explain:", "Explain:", "What is this error?"),
+  "Explain: What is this error?"
+)
+assert.equal(
+  sandbox.mergeVoiceTranscript("", "What is this error?", "What is this error?"),
+  "What is this error?",
+  "already auto-pasted transcript must not be appended a second time"
+)
+assert.equal(
+  sandbox.mergeVoiceTranscript("Explain: ", "Explain: What is this error?", "What is this error?"),
+  "Explain: What is this error?"
+)
+assert.equal(
+  sandbox.dedupeLateVoicePaste("What is this error? What is this error?", "What is this error?", "What is this error?"),
+  "What is this error?",
+  "late auto-paste with space should collapse to one copy"
+)
+assert.equal(
+  sandbox.dedupeLateVoicePaste("What is this error?What is this error?", "What is this error?", "What is this error?"),
+  "What is this error?",
+  "late auto-paste without space should collapse to one copy"
+)
+assert.equal(
+  sandbox.dedupeLateVoicePaste("What is this error? please", "What is this error?", "What is this error?"),
+  "What is this error? please",
+  "normal user typing after dictation must not be stripped"
+)
+
 console.log("test_logic.mjs: ALL PASSED")

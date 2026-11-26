@@ -111,6 +111,7 @@ def main() -> int:
 
             deadline = time.monotonic() + 12.0
             final_text = ""
+            settle_deadline = 0.0
             while time.monotonic() < deadline:
                 _, st, _ = run_sw(binary, ["status"])
                 phase = str(st.get("phase") or st.get("state") or "").lower()
@@ -119,12 +120,20 @@ def main() -> int:
                 txt = extract_text(rd)
                 if txt and (not args.baseline or sig != args.baseline):
                     final_text = txt
-                    break
-                if phase in ("idle", "ready", "") and time.monotonic() > deadline - 10.5:
+                    if phase in ("idle", "ready", ""):
+                        # Give Superwhisper's Wayland auto-paste / text-commit a brief
+                        # moment to land in the focused field before we return.
+                        time.sleep(0.15)
+                        break
+                    if settle_deadline == 0.0:
+                        settle_deadline = time.monotonic() + 1.5
+                    elif time.monotonic() >= settle_deadline:
+                        break
+                elif phase in ("idle", "ready", "") and time.monotonic() > deadline - 10.5:
                     if txt and (not args.baseline or sig != args.baseline):
                         final_text = txt
                     break
-                time.sleep(0.2)
+                time.sleep(0.15)
 
             if not final_text:
                 _, rd, _ = run_sw(binary, ["read"])

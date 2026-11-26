@@ -59,6 +59,9 @@ Item {
   // Superwhisper voice state: "idle" | "recording" | "transcribing"
   property string voiceState: "idle"
   property string voiceBaseline: ""
+  property string voicePromptBefore: ""
+  property string voiceExpectedAfterInsert: ""
+  property string voiceLastTranscript: ""
 
   // Pending stdin payloads for Process helpers
   property string pendingAskJson: ""
@@ -160,6 +163,10 @@ Item {
     root.toastMessage = ""
     root.voiceState = "idle"
     root.voiceBaseline = ""
+    root.voicePromptBefore = ""
+    root.voiceExpectedAfterInsert = ""
+    root.voiceLastTranscript = ""
+    voiceDedupeTimer.stop()
     promptField.text = ""
   }
 
@@ -418,6 +425,10 @@ Item {
     if (root.voiceState === "transcribing") return
     if (root.voiceState === "idle") {
       root.errorMessage = ""
+      root.voicePromptBefore = promptField.text
+      root.voiceExpectedAfterInsert = ""
+      root.voiceLastTranscript = ""
+      voiceDedupeTimer.stop()
       voiceStartProc.running = false
       voiceStartProc.running = true
     } else if (root.voiceState === "recording") {
@@ -486,6 +497,16 @@ Item {
     interval: 2200
     repeat: false
     onTriggered: root.toastMessage = ""
+  }
+
+  Timer {
+    id: voiceDedupeTimer
+    interval: 800
+    repeat: false
+    onTriggered: {
+      root.voiceExpectedAfterInsert = ""
+      root.voiceLastTranscript = ""
+    }
   }
 
   // Drives crisp activity feedback (braille spinner, progress bar, elapsed seconds)
@@ -652,9 +673,13 @@ Item {
         if (res && res.ok) {
           var transcript = String(res.text || "").trim()
           if (transcript) {
-            promptField.text = promptField.text.trim()
-              ? (promptField.text.trim() + " " + transcript)
-              : transcript
+            var merged = Logic.mergeVoiceTranscript(root.voicePromptBefore, promptField.text, transcript)
+            if (merged !== promptField.text) {
+              root.voiceExpectedAfterInsert = merged
+              root.voiceLastTranscript = transcript
+              voiceDedupeTimer.restart()
+              promptField.text = merged
+            }
             promptField.cursorPosition = promptField.text.length
             promptField.forceActiveFocus()
           }
@@ -1473,6 +1498,18 @@ Item {
               accent: root.accentColor
               font.family: root.uiFont
               onAccepted: root.submitPrompt()
+              onTextChanged: {
+                if (voiceDedupeTimer.running && root.voiceLastTranscript && root.voiceExpectedAfterInsert) {
+                  var cleaned = Logic.dedupeLateVoicePaste(promptField.text, root.voiceExpectedAfterInsert, root.voiceLastTranscript)
+                  if (cleaned !== promptField.text) {
+                    voiceDedupeTimer.stop()
+                    root.voiceExpectedAfterInsert = ""
+                    root.voiceLastTranscript = ""
+                    promptField.text = cleaned
+                    promptField.cursorPosition = promptField.text.length
+                  }
+                }
+              }
 
               Keys.onPressed: function(event) {
                 if (event.key === Qt.Key_Escape) {

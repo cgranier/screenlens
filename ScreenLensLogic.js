@@ -269,3 +269,69 @@ function buildAgentHandoffPrompt(opts) {
 
   return lines.join("\n")
 }
+
+function _normWhitespace(value) {
+  return String(value === undefined || value === null ? "" : value).trim().replace(/\s+/g, " ")
+}
+
+function _countOccurrences(haystack, needle) {
+  if (!haystack || !needle) return 0
+  var count = 0
+  var pos = 0
+  while (true) {
+    var idx = haystack.indexOf(needle, pos)
+    if (idx === -1) break
+    count++
+    pos = idx + needle.length
+  }
+  return count
+}
+
+// Merges a Superwhisper voice transcript into the prompt field without
+// duplicating it when Superwhisper's auto-paste / Wayland text-commit has
+// already inserted the transcript into the focused input.
+function mergeVoiceTranscript(beforeText, currentText, transcript) {
+  var before = String(beforeText || "")
+  var current = String(currentText || "")
+  var clean = String(transcript || "").trim()
+  if (!clean) return current
+
+  var normClean = _normWhitespace(clean)
+  if (current !== before) {
+    var beforeCount = _countOccurrences(_normWhitespace(before), normClean)
+    var currentCount = _countOccurrences(_normWhitespace(current), normClean)
+    if (currentCount > beforeCount) {
+      return current
+    }
+  }
+
+  var trimmedCurrent = current.trim()
+  return trimmedCurrent ? (trimmedCurrent + " " + clean) : clean
+}
+
+// Collapses an immediate late auto-paste duplicate if Superwhisper commits the
+// same transcript into the focused field right after ScreenLens inserted it.
+function dedupeLateVoicePaste(currentText, expectedAfterInsert, transcript) {
+  var current = String(currentText || "")
+  var expected = String(expectedAfterInsert || "")
+  var clean = String(transcript || "").trim()
+  if (!current || !expected || !clean || current === expected) return current
+
+  var normCurrent = _normWhitespace(current)
+  var normExpected = _normWhitespace(expected)
+  var normClean = _normWhitespace(clean)
+  if (_countOccurrences(normCurrent, normClean) <= _countOccurrences(normExpected, normClean)) {
+    return current
+  }
+
+  // Strip one extra occurrence of the transcript (adjacent with or without space)
+  // and verify the remaining text matches what ScreenLens expected.
+  var idx = normCurrent.lastIndexOf(normClean)
+  if (idx !== -1) {
+    var candidate = _normWhitespace(normCurrent.slice(0, idx) + " " + normCurrent.slice(idx + normClean.length))
+    if (candidate === normExpected) {
+      return expected
+    }
+  }
+  return current
+}
