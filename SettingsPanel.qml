@@ -1,4 +1,6 @@
 import QtQuick
+import QtQuick.Layouts
+import QtQuick.Shapes
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -31,6 +33,15 @@ Ui.Panel {
   readonly property color accentColor: resolvedPalette.accent
   readonly property color urgentColor: resolvedPalette.urgent
   readonly property color borderColor: resolvedPalette.border
+  readonly property color onAccentInk: Logic.inkOn(String(accentColor))
+  readonly property color cardFill: Util.alpha(fgColor, 0.03)
+  readonly property color cardBorder: Util.alpha(fgColor, 0.08)
+  readonly property color restFill: Util.alpha(fgColor, 0.045)
+  readonly property color hoverFill: Util.alpha(fgColor, 0.09)
+  readonly property color hairline: Util.alpha(fgColor, 0.12)
+  readonly property color rowDivider: Util.alpha(fgColor, 0.06)
+  readonly property color mutedInk: Util.alpha(fgColor, 0.50)
+  readonly property color secondaryInk: Util.alpha(fgColor, 0.72)
   readonly property int cornerRadius: Style.cornerRadius
   readonly property string uiFont: Style.font.family
 
@@ -228,6 +239,13 @@ Ui.Panel {
     var active = String(currentProviderCfg().model || "")
     if (active && base.indexOf(active) === -1) base.unshift(active)
     return base
+  }
+
+  function providerReady(provId) {
+    var provs = (root.config && root.config.providers) ? root.config.providers : ({})
+    var p = provs[provId] || ({})
+    if (provId === "ollama" || provId === "agent") return true
+    return !!(p.hasKey || p.hasEnvKey)
   }
 
   function providerStatusBadge(provId) {
@@ -544,15 +562,211 @@ Ui.Panel {
     }
   }
 
-  // Top-bar widget icon: left-click toggles Settings, right-click captures screen.
+  // ---------------------------------------------------------------- inline UI helpers
+
+  // Custom crisp ScreenLens vector mark (4 rounded viewfinder brackets + center lens dot)
+  // drawn on a 24-unit coordinate space via Shape.CurveRenderer for sharp DPI scaling.
+  component LensMark: Shape {
+    id: mark
+    property real iconSize: Style.bar.iconCanvas
+    property color inkColor: root.barForeground
+    property color dotColor: inkColor
+    readonly property real u: iconSize / 24.0
+    width: iconSize
+    height: iconSize
+    implicitWidth: iconSize
+    implicitHeight: iconSize
+    preferredRendererType: Shape.CurveRenderer
+    antialiasing: true
+
+    // Top-left bracket
+    ShapePath {
+      fillColor: "transparent"
+      strokeColor: Util.alpha(mark.inkColor, 0.92)
+      strokeWidth: Math.max(1.4, 2.2 * mark.u)
+      capStyle: ShapePath.RoundCap
+      joinStyle: ShapePath.RoundJoin
+      startX: 3.5 * mark.u; startY: 8.5 * mark.u
+      PathLine { x: 3.5 * mark.u; y: 5.5 * mark.u }
+      PathQuad { x: 5.5 * mark.u; y: 3.5 * mark.u; controlX: 3.5 * mark.u; controlY: 3.5 * mark.u }
+      PathLine { x: 8.5 * mark.u; y: 3.5 * mark.u }
+    }
+    // Top-right bracket
+    ShapePath {
+      fillColor: "transparent"
+      strokeColor: Util.alpha(mark.inkColor, 0.92)
+      strokeWidth: Math.max(1.4, 2.2 * mark.u)
+      capStyle: ShapePath.RoundCap
+      joinStyle: ShapePath.RoundJoin
+      startX: 15.5 * mark.u; startY: 3.5 * mark.u
+      PathLine { x: 18.5 * mark.u; y: 3.5 * mark.u }
+      PathQuad { x: 20.5 * mark.u; y: 5.5 * mark.u; controlX: 20.5 * mark.u; controlY: 3.5 * mark.u }
+      PathLine { x: 20.5 * mark.u; y: 8.5 * mark.u }
+    }
+    // Bottom-left bracket
+    ShapePath {
+      fillColor: "transparent"
+      strokeColor: Util.alpha(mark.inkColor, 0.92)
+      strokeWidth: Math.max(1.4, 2.2 * mark.u)
+      capStyle: ShapePath.RoundCap
+      joinStyle: ShapePath.RoundJoin
+      startX: 3.5 * mark.u; startY: 15.5 * mark.u
+      PathLine { x: 3.5 * mark.u; y: 18.5 * mark.u }
+      PathQuad { x: 5.5 * mark.u; y: 20.5 * mark.u; controlX: 3.5 * mark.u; controlY: 20.5 * mark.u }
+      PathLine { x: 8.5 * mark.u; y: 20.5 * mark.u }
+    }
+    // Bottom-right bracket
+    ShapePath {
+      fillColor: "transparent"
+      strokeColor: Util.alpha(mark.inkColor, 0.92)
+      strokeWidth: Math.max(1.4, 2.2 * mark.u)
+      capStyle: ShapePath.RoundCap
+      joinStyle: ShapePath.RoundJoin
+      startX: 15.5 * mark.u; startY: 20.5 * mark.u
+      PathLine { x: 18.5 * mark.u; y: 20.5 * mark.u }
+      PathQuad { x: 20.5 * mark.u; y: 18.5 * mark.u; controlX: 20.5 * mark.u; controlY: 20.5 * mark.u }
+      PathLine { x: 20.5 * mark.u; y: 15.5 * mark.u }
+    }
+    // Center lens circle
+    ShapePath {
+      fillColor: mark.dotColor
+      strokeColor: "transparent"
+      strokeWidth: 0
+      PathAngleArc {
+        centerX: 12 * mark.u
+        centerY: 12 * mark.u
+        radiusX: 3.2 * mark.u
+        radiusY: 3.2 * mark.u
+        startAngle: 0
+        sweepAngle: 360
+      }
+    }
+  }
+
+  component SectionLabel: PlainText {
+    color: root.mutedInk
+    font.family: root.uiFont
+    font.pixelSize: Style.font.caption
+    font.bold: true
+    font.letterSpacing: 1.0
+    leftPadding: Style.space(2)
+  }
+
+  component SectionCard: Rectangle {
+    radius: root.cornerRadius
+    color: root.cardFill
+    border.width: 1
+    border.color: root.cardBorder
+    clip: true
+  }
+
+  component CardDivider: Rectangle {
+    height: 1
+    color: root.rowDivider
+  }
+
+  component KeyCap: Rectangle {
+    id: kcap
+    property string label: ""
+    property color capTextColor: Util.alpha(root.fgColor, 0.72)
+    property color capBg: Util.alpha(root.fgColor, 0.06)
+    property color capBorder: Util.alpha(root.fgColor, 0.16)
+    radius: Math.min(3, root.cornerRadius)
+    color: capBg
+    border.width: 1
+    border.color: capBorder
+    implicitWidth: kcapTxt.implicitWidth + Style.space(8)
+    implicitHeight: kcapTxt.implicitHeight + Style.space(3)
+
+    PlainText {
+      id: kcapTxt
+      anchors.centerIn: parent
+      text: kcap.label
+      color: kcap.capTextColor
+      font.family: root.uiFont
+      font.pixelSize: Math.max(9, Style.font.caption - 1)
+    }
+  }
+
+  component PillOption: Rectangle {
+    id: pill
+    property string label: ""
+    property string icon: ""
+    property bool active: false
+    property bool showDot: false
+    property bool dotReady: false
+    property real fontSize: Style.font.bodySmall
+    signal clicked()
+
+    radius: Math.min(4, root.cornerRadius)
+    color: active
+      ? Util.alpha(root.accentColor, 0.18)
+      : (pillHover.hovered ? root.hoverFill : root.restFill)
+    border.width: 1
+    border.color: active
+      ? Util.alpha(root.accentColor, 0.65)
+      : (pillHover.hovered ? Util.alpha(root.fgColor, 0.22) : root.cardBorder)
+    implicitWidth: pillRow.implicitWidth + Style.space(16)
+    implicitHeight: Style.space(26)
+
+    Row {
+      id: pillRow
+      anchors.centerIn: parent
+      spacing: Style.space(5)
+
+      Rectangle {
+        visible: pill.showDot
+        anchors.verticalCenter: parent.verticalCenter
+        width: Style.space(6)
+        height: Style.space(6)
+        radius: width / 2
+        color: pill.dotReady ? root.accentColor : "transparent"
+        border.width: pill.dotReady ? 0 : 1
+        border.color: root.mutedInk
+      }
+
+      PlainText {
+        visible: pill.icon.length > 0
+        anchors.verticalCenter: parent.verticalCenter
+        text: pill.icon
+        color: pill.active ? root.accentColor : root.secondaryInk
+        font.family: root.uiFont
+        font.pixelSize: pill.fontSize
+      }
+
+      PlainText {
+        anchors.verticalCenter: parent.verticalCenter
+        text: pill.label
+        color: pill.active ? root.fgColor : root.secondaryInk
+        font.family: root.uiFont
+        font.pixelSize: pill.fontSize
+        font.bold: pill.active
+      }
+    }
+
+    HoverHandler { id: pillHover; cursorShape: Qt.PointingHandCursor }
+    MouseArea {
+      anchors.fill: parent
+      cursorShape: Qt.PointingHandCursor
+      onClicked: pill.clicked()
+    }
+  }
+
+  // Top-bar widget icon: custom crisp vector viewfinder mark.
+  // Left-click toggles Settings, right-click captures screen immediately.
   Ui.BarIconButton {
     id: barButton
     bar: root.bar
-    text: "󰍉"
     active: root.opened
     foreground: root.barForeground
     activeColor: root.accentColor
     tooltipText: strings.t("settings.barTooltip")
+    iconComponent: Component {
+      LensMark {
+        inkColor: barButton.active ? root.accentColor : root.barForeground
+        dotColor: barButton.active ? root.accentColor : root.barForeground
+      }
+    }
     onPressed: function(button) {
       if (button === Qt.RightButton) root.launchCapture()
       else root.toggle()
@@ -567,8 +781,8 @@ Ui.Panel {
     open: root.opened
     popoutSwitching: root.popoutSwitching
     popoutSwitchClosing: root.popoutSwitchClosing
-    contentWidth: Style.space(520)
-    contentHeight: Math.min(Style.space(620), Math.max(Style.space(320), panelColumn.implicitHeight + Style.spacing.popupPadding * 2))
+    contentWidth: Style.space(480)
+    contentHeight: Style.space(520)
     focusTarget: panelKeyCatcher
 
     Item {
@@ -577,7 +791,7 @@ Ui.Panel {
       focus: true
 
       // Surface backdrop when Dark or Light override is chosen (System uses
-      // KeyboardPanel's native themed background).
+      // KeyboardPanel's native themed/glassy background).
       Rectangle {
         anchors.fill: parent
         anchors.margins: -Style.spacing.popupPadding
@@ -594,36 +808,39 @@ Ui.Panel {
           event.accepted = true
         } else if (event.key === Qt.Key_Tab) {
           root.cycleTab(1)
+          bodyFlick.contentY = 0
           event.accepted = true
         } else if (event.key === Qt.Key_Backtab) {
           root.cycleTab(-1)
+          bodyFlick.contentY = 0
+          event.accepted = true
+        } else if (event.key === Qt.Key_C && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
+          root.launchCapture()
           event.accepted = true
         }
       }
 
-      Column {
-        id: panelColumn
-        anchors.left: parent.left
-        anchors.right: parent.right
-        spacing: Style.spacing.sm
+      ColumnLayout {
+        id: frameLayout
+        anchors.fill: parent
+        spacing: Style.space(8)
 
-        // Header row
+        // ============================================================ FIXED HEADER
         Item {
-          width: parent.width
-          implicitHeight: Math.max(headerLeft.implicitHeight, headerRight.implicitHeight)
+          Layout.fillWidth: true
+          implicitHeight: Style.space(34)
 
           Row {
             id: headerLeft
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.spacing.xs
+            spacing: Style.space(8)
 
-            PlainText {
+            LensMark {
               anchors.verticalCenter: parent.verticalCenter
-              text: "󰍉"
-              color: root.accentColor
-              font.family: root.uiFont
-              font.pixelSize: Style.font.icon
+              iconSize: Style.space(18)
+              inkColor: root.fgColor
+              dotColor: root.accentColor
             }
 
             PlainText {
@@ -640,935 +857,1316 @@ Ui.Panel {
             id: headerRight
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.spacing.xs
+            spacing: Style.space(6)
 
-            Ui.Button {
-              foreground: root.fgColor
-              text: strings.t("settings.captureNow")
-              iconText: "󰒅"
-              fontSize: Style.font.bodySmall
-              selected: true
-              onClicked: root.launchCapture()
-            }
-
-            Ui.Button {
-              foreground: root.fgColor
-              iconText: "󰅖"
-              tooltipText: strings.t("action.close")
-              onClicked: root.close()
-            }
-          }
-        }
-
-        // Reel-style horizontal tab strip
-        Row {
-          width: parent.width
-          spacing: Style.spacing.xs
-
-          Ui.Button {
-            foreground: root.fgColor
-            text: strings.t("settings.tab.general")
-            iconText: "󰒓"
-            fontSize: Style.font.bodySmall
-            selected: root.activeTab === "general"
-            bordered: true
-            onClicked: root.activeTab = "general"
-          }
-
-          Ui.Button {
-            foreground: root.fgColor
-            text: strings.t("settings.tab.providers")
-            iconText: "󰚩"
-            fontSize: Style.font.bodySmall
-            selected: root.activeTab === "providers"
-            bordered: true
-            onClicked: root.activeTab = "providers"
-          }
-
-          Ui.Button {
-            foreground: root.fgColor
-            text: strings.t("settings.tab.tasks")
-            iconText: "󰒋"
-            fontSize: Style.font.bodySmall
-            selected: root.activeTab === "tasks"
-            bordered: true
-            onClicked: root.activeTab = "tasks"
-          }
-
-          Ui.Button {
-            foreground: root.fgColor
-            text: strings.t("settings.tab.language")
-            iconText: "󰗊"
-            fontSize: Style.font.bodySmall
-            selected: root.activeTab === "language"
-            bordered: true
-            onClicked: root.activeTab = "language"
-          }
-        }
-
-        Rectangle {
-          width: parent.width
-          height: 1
-          color: Util.alpha(root.fgColor, 0.14)
-        }
-
-        // ============================================================ GENERAL TAB
-        Column {
-          visible: root.activeTab === "general"
-          width: parent.width
-          spacing: Style.spacing.sm
-
-          Ui.PanelSectionHeader {
-            text: strings.t("settings.section.keybind")
-            foreground: root.fgColor
-          }
-
-          Row {
-            id: keybindRow
-            width: parent.width
-            spacing: Style.spacing.xs
-
-            Ui.TextField {
-              id: keybindInput
-              width: keybindRow.width - applyKbBtn.implicitWidth - keybindRow.spacing
-              text: root.keybindDraft
-              placeholderText: "SUPER + ALT + A"
-              foreground: root.fgColor
-              accent: root.accentColor
-              onTextEdited: root.keybindDraft = text
-              onAccepted: root.applyKeybind()
-              Keys.onEscapePressed: root.close()
-            }
-
-            Ui.Button {
-              foreground: root.fgColor
-              id: applyKbBtn
-              anchors.verticalCenter: parent.verticalCenter
-              text: strings.t("settings.apply")
-              bordered: true
-              selected: true
-              onClicked: root.applyKeybind()
-            }
-          }
-
-          Item {
-            width: parent.width
-            implicitHeight: Math.max(rebindLabel.implicitHeight, rebindSwitch.implicitHeight)
-
-            PlainText {
-              id: rebindLabel
-              anchors.left: parent.left
-              anchors.right: rebindSwitch.left
-              anchors.rightMargin: Style.spacing.sm
-              anchors.verticalCenter: parent.verticalCenter
-              text: strings.t("settings.rebindHint")
-              color: Util.alpha(root.fgColor, 0.72)
-              font.family: root.uiFont
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.Wrap
-            }
-
-            Ui.ToggleSwitch {
-              id: rebindSwitch
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              checked: root.rebindExisting
-              foreground: root.fgColor
-              accent: root.accentColor
-              onToggled: root.rebindExisting = !root.rebindExisting
-            }
-          }
-
-          Ui.PanelSectionHeader {
-            text: strings.t("settings.section.appearance")
-            foreground: root.fgColor
-          }
-
-          Row {
-            spacing: Style.spacing.xs
-
-            Repeater {
-              model: [
-                { id: "system", label: strings.t("settings.theme.system") },
-                { id: "dark", label: strings.t("settings.theme.dark") },
-                { id: "light", label: strings.t("settings.theme.light") }
-              ]
-              delegate: Ui.Button {
-                foreground: root.fgColor
-                text: modelData.label
-                fontSize: Style.font.bodySmall
-                bordered: true
-                selected: root.cfgVal("theme", "system") === modelData.id
-                onClicked: root.patchConfig({ theme: modelData.id })
-              }
-            }
-          }
-
-          Ui.PanelSectionHeader {
-            text: strings.t("settings.section.capture")
-            foreground: root.fgColor
-          }
-
-          Row {
-            spacing: Style.spacing.xs
-
-            Ui.Button {
-              foreground: root.fgColor
-              text: strings.t("mode.lasso")
-              iconText: "󰒅"
-              fontSize: Style.font.bodySmall
-              bordered: true
-              selected: root.cfgVal("defaultMode", "lasso") === "lasso"
-              onClicked: root.patchConfig({ defaultMode: "lasso" })
-            }
-
-            Ui.Button {
-              foreground: root.fgColor
-              text: strings.t("mode.text")
-              iconText: "󰗧"
-              fontSize: Style.font.bodySmall
-              bordered: true
-              selected: root.cfgVal("defaultMode", "lasso") === "text"
-              onClicked: root.patchConfig({ defaultMode: "text" })
-            }
-          }
-
-          Row {
-            spacing: Style.spacing.xs
-
-            PlainText {
-              anchors.verticalCenter: parent.verticalCenter
-              text: strings.t("settings.maxImageDim")
-              color: Util.alpha(root.fgColor, 0.78)
-              font.family: root.uiFont
-              font.pixelSize: Style.font.caption
-            }
-
-            Repeater {
-              model: [1280, 1920, 2560, 3840]
-              delegate: Ui.Button {
-                foreground: root.fgColor
-                text: String(modelData) + "px"
-                fontSize: Style.font.caption
-                bordered: true
-                selected: Number(root.cfgVal("maxImageDim", 1920)) === modelData
-                onClicked: root.patchConfig({ maxImageDim: modelData })
-              }
-            }
-          }
-        }
-
-        // ============================================================ PROVIDERS TAB
-        Column {
-          visible: root.activeTab === "providers"
-          width: parent.width
-          spacing: Style.spacing.sm
-
-          Ui.PanelSectionHeader {
-            text: strings.t("settings.defaultProvider")
-            foreground: root.fgColor
-          }
-
-          Flow {
-            width: parent.width
-            spacing: Style.spacing.xs
-
-            Repeater {
-              model: [
-                { id: "auto", label: "Auto" },
-                { id: "gemini", label: "Gemini" },
-                { id: "anthropic", label: "Claude" },
-                { id: "openai", label: "OpenAI" },
-                { id: "ollama", label: "Ollama" },
-                { id: "agent", label: "CLI Agent" }
-              ]
-              delegate: Ui.Button {
-                foreground: root.fgColor
-                text: modelData.label
-                fontSize: Style.font.bodySmall
-                bordered: true
-                selected: root.cfgVal("defaultProvider", "auto") === modelData.id
-                onClicked: root.patchConfig({ defaultProvider: modelData.id })
-              }
-            }
-          }
-
-          Ui.PanelSectionHeader {
-            text: strings.t("settings.configuredProviders")
-            foreground: root.fgColor
-          }
-
-          // Provider selector pills
-          Flow {
-            width: parent.width
-            spacing: Style.spacing.xs
-
-            Repeater {
-              model: [
-                { id: "gemini", label: "Gemini" },
-                { id: "anthropic", label: "Claude" },
-                { id: "openai", label: "OpenAI" },
-                { id: "ollama", label: "Ollama" },
-                { id: "agent", label: "CLI Agent" }
-              ]
-              delegate: Ui.Button {
-                foreground: root.fgColor
-                text: modelData.label
-                fontSize: Style.font.caption
-                bordered: true
-                selected: root.selectedProvider === modelData.id
-                onClicked: root.selectProvider(modelData.id)
-              }
-            }
-          }
-
-          // Active provider detail editor card
-          Rectangle {
-            width: parent.width
-            radius: Math.min(4, root.cornerRadius)
-            color: Util.alpha(root.fgColor, 0.05)
-            border.width: 1
-            border.color: Util.alpha(root.accentColor, 0.35)
-            implicitHeight: providerEditorCol.implicitHeight + Style.spacing.md * 2
-
-            Column {
-              id: providerEditorCol
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.top: parent.top
-              anchors.margins: Style.spacing.md
-              spacing: Style.spacing.sm
-
-              // Provider title + status badge + Get key + Test
-              Item {
-                width: parent.width
-                implicitHeight: Math.max(provTitleCol.implicitHeight, provActionsRow.implicitHeight)
-
-                Column {
-                  id: provTitleCol
-                  anchors.left: parent.left
-                  anchors.right: provActionsRow.left
-                  anchors.rightMargin: Style.spacing.xs
-                  anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.space(2)
-
-                  PlainText {
-                    text: String(root.currentProviderMeta().name || root.selectedProvider)
-                    color: root.fgColor
-                    font.family: root.uiFont
-                    font.pixelSize: Style.font.body
-                    font.bold: true
-                  }
-
-                  PlainText {
-                    text: root.providerStatusBadge(root.selectedProvider)
-                    color: (root.currentProviderCfg().hasKey || root.currentProviderCfg().hasEnvKey)
-                      ? root.accentColor
-                      : Util.alpha(root.fgColor, 0.68)
-                    font.family: root.uiFont
-                    font.pixelSize: Style.font.caption
-                    elide: Text.ElideRight
-                    width: parent.width
-                  }
-                }
-
-                Row {
-                  id: provActionsRow
-                  anchors.right: parent.right
-                  anchors.verticalCenter: parent.verticalCenter
-                  spacing: Style.spacing.xs
-
-                  Ui.Button {
-                    foreground: root.fgColor
-                    visible: String(root.currentProviderMeta().keyUrl || "").length > 0
-                    text: strings.t("settings.getApiKey")
-                    fontSize: Style.font.caption
-                    bordered: true
-                    onClicked: root.openKeyConsole(root.selectedProvider)
-                  }
-
-                  Ui.Button {
-                    foreground: root.fgColor
-                    text: root.testingProvider ? strings.t("settings.testing") : strings.t("settings.testConnection")
-                    iconText: "󰙨"
-                    iconSpinning: root.testingProvider
-                    fontSize: Style.font.caption
-                    bordered: true
-                    selected: true
-                    onClicked: root.testSelectedProvider()
-                  }
-                }
-              }
-
-              // Inline test result banner
-              PlainText {
-                visible: root.providerTestText.length > 0
-                width: parent.width
-                text: root.providerTestText
-                color: root.providerTestOk ? root.accentColor : root.urgentColor
-                font.family: root.uiFont
-                font.pixelSize: Style.font.caption
-                font.bold: true
-                wrapMode: Text.Wrap
-              }
-
-              // Model dropdown + refresh button
-              Row {
-                id: modelRow
-                width: parent.width
-                spacing: Style.spacing.xs
-
-                Ui.Dropdown {
-                  width: modelRow.width - refreshModelsBtn.implicitWidth - modelRow.spacing
-                  label: strings.t("settings.modelLabel")
-                  value: String(root.currentProviderCfg().model || root.currentProviderMeta().defaultModel || "")
-                  options: root.currentProviderModels()
-                  foreground: root.fgColor
-                  background: root.bgColor
-                  accent: root.accentColor
-                  onChanged: function(nextModel) {
-                    root.saveProviderField(root.selectedProvider, { model: nextModel })
-                  }
-                }
-
-                Ui.Button {
-                  foreground: root.fgColor
-                  id: refreshModelsBtn
-                  anchors.bottom: parent.bottom
-                  iconText: "󰑐"
-                  iconSpinning: root.refreshingModels
-                  bordered: true
-                  tooltipText: strings.t("settings.refreshModels")
-                  onClicked: root.refreshModelsFor(root.selectedProvider)
-                }
-              }
-
-              // Custom model ID override
-              Row {
-                id: customModelRow
-                width: parent.width
-                spacing: Style.spacing.xs
-
-                Ui.TextField {
-                  width: customModelRow.width - saveModelBtn.implicitWidth - customModelRow.spacing
-                  text: root.customModelDraft
-                  placeholderText: strings.t("settings.customModelPlaceholder")
-                  foreground: root.fgColor
-                  accent: root.accentColor
-                  onTextEdited: root.customModelDraft = text
-                  onAccepted: {
-                    var m = root.customModelDraft.trim()
-                    if (m) {
-                      root.saveProviderField(root.selectedProvider, { model: m })
-                      root.customModelDraft = ""
-                    }
-                  }
-                  Keys.onEscapePressed: root.close()
-                }
-
-                Ui.Button {
-                  foreground: root.fgColor
-                  id: saveModelBtn
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: strings.t("settings.save")
-                  fontSize: Style.font.caption
-                  bordered: true
-                  onClicked: {
-                    var m = root.customModelDraft.trim()
-                    if (m) {
-                      root.saveProviderField(root.selectedProvider, { model: m })
-                      root.customModelDraft = ""
-                    }
-                  }
-                }
-              }
-
-              // Masked API key editor (Gemini / Anthropic / OpenAI)
-              Column {
-                visible: root.currentProviderMeta().requiresKey === true
-                width: parent.width
-                spacing: Style.spacing.xs
-
-                PlainText {
-                  text: strings.t("settings.apiKeyLabel")
-                  color: Util.alpha(root.fgColor, 0.72)
-                  font.family: root.uiFont
-                  font.pixelSize: Style.font.caption
-                  font.bold: true
-                }
-
-                Row {
-                  id: apiKeyRow
-                  width: parent.width
-                  spacing: Style.spacing.xs
-
-                  Ui.TextField {
-                    width: apiKeyRow.width - saveKeyBtn.implicitWidth - (clearKeyBtn.visible ? clearKeyBtn.implicitWidth + apiKeyRow.spacing : 0) - apiKeyRow.spacing
-                    password: true
-                    text: root.apiKeyDraft
-                    placeholderText: root.currentProviderCfg().hasKey
-                      ? strings.t("settings.apiKeySavedPlaceholder").arg(String(root.currentProviderCfg().maskedKey || "••••"))
-                      : strings.t("settings.apiKeyPlaceholder")
-                    foreground: root.fgColor
-                    accent: root.accentColor
-                    onTextEdited: root.apiKeyDraft = text
-                    onAccepted: {
-                      var k = root.apiKeyDraft.trim()
-                      if (k) {
-                        root.saveProviderField(root.selectedProvider, { apiKey: k })
-                        root.apiKeyDraft = ""
-                      }
-                    }
-                    Keys.onEscapePressed: root.close()
-                  }
-
-                  Ui.Button {
-                    foreground: root.fgColor
-                    id: saveKeyBtn
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: strings.t("settings.save")
-                    fontSize: Style.font.caption
-                    bordered: true
-                    selected: root.apiKeyDraft.trim().length > 0
-                    onClicked: {
-                      var k = root.apiKeyDraft.trim()
-                      if (k) {
-                        root.saveProviderField(root.selectedProvider, { apiKey: k })
-                        root.apiKeyDraft = ""
-                      }
-                    }
-                  }
-
-                  Ui.Button {
-                    foreground: root.fgColor
-                    id: clearKeyBtn
-                    visible: root.currentProviderCfg().hasKey === true
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: strings.t("settings.clear")
-                    fontSize: Style.font.caption
-                    bordered: true
-                    onClicked: {
-                      root.apiKeyDraft = ""
-                      root.saveProviderField(root.selectedProvider, { apiKey: "" })
-                    }
-                  }
-                }
-              }
-
-              // Ollama server URL editor
-              Column {
-                visible: root.selectedProvider === "ollama"
-                width: parent.width
-                spacing: Style.spacing.xs
-
-                PlainText {
-                  text: strings.t("settings.ollamaHostLabel")
-                  color: Util.alpha(root.fgColor, 0.72)
-                  font.family: root.uiFont
-                  font.pixelSize: Style.font.caption
-                  font.bold: true
-                }
-
-                Row {
-                  id: ollamaRow
-                  width: parent.width
-                  spacing: Style.spacing.xs
-
-                  Ui.TextField {
-                    width: ollamaRow.width - saveOllamaBtn.implicitWidth - ollamaRow.spacing
-                    text: root.ollamaHostDraft
-                    placeholderText: "http://127.0.0.1:11434"
-                    foreground: root.fgColor
-                    accent: root.accentColor
-                    onTextEdited: root.ollamaHostDraft = text
-                    onAccepted: root.saveProviderField("ollama", { host: root.ollamaHostDraft.trim() })
-                    Keys.onEscapePressed: root.close()
-                  }
-
-                  Ui.Button {
-                    foreground: root.fgColor
-                    id: saveOllamaBtn
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: strings.t("settings.save")
-                    fontSize: Style.font.caption
-                    bordered: true
-                    onClicked: root.saveProviderField("ollama", { host: root.ollamaHostDraft.trim() })
-                  }
-                }
-              }
-
-              // Omarchy CLI agent selector
-              Column {
-                visible: root.selectedProvider === "agent"
-                width: parent.width
-                spacing: Style.spacing.xs
-
-                PlainText {
-                  text: strings.t("settings.cliAgentLabel")
-                  color: Util.alpha(root.fgColor, 0.72)
-                  font.family: root.uiFont
-                  font.pixelSize: Style.font.caption
-                  font.bold: true
-                }
-
-                Flow {
-                  width: parent.width
-                  spacing: Style.spacing.xs
-
-                  Repeater {
-                    model: Array.isArray(root.currentProviderMeta().clis)
-                      ? root.currentProviderMeta().clis
-                      : ["default", "claude", "codex", "agy", "opencode", "grok", "gemini"]
-                    delegate: Ui.Button {
-                      foreground: root.fgColor
-                      text: modelData
-                      fontSize: Style.font.caption
-                      bordered: true
-                      selected: String(root.currentProviderCfg().cli || "default") === modelData
-                      onClicked: root.selectAgentCli(modelData)
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        // ============================================================ TASKS TAB
-        Column {
-          visible: root.activeTab === "tasks"
-          width: parent.width
-          spacing: Style.spacing.sm
-
-          Item {
-            width: parent.width
-            implicitHeight: Math.max(routingLabel.implicitHeight, routingSwitch.implicitHeight)
-
-            PlainText {
-              id: routingLabel
-              anchors.left: parent.left
-              anchors.right: routingSwitch.left
-              anchors.rightMargin: Style.spacing.sm
-              anchors.verticalCenter: parent.verticalCenter
-              text: strings.t("settings.enableTaskRouting")
-              color: root.fgColor
-              font.family: root.uiFont
-              font.pixelSize: Style.font.bodySmall
-              font.bold: true
-            }
-
-            Ui.ToggleSwitch {
-              id: routingSwitch
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              checked: !!(root.config && root.config.taskRouting && root.config.taskRouting.enabled)
-              foreground: root.fgColor
-              accent: root.accentColor
-              onToggled: root.patchConfig({
-                taskRouting: {
-                  enabled: !(root.config && root.config.taskRouting && root.config.taskRouting.enabled)
-                }
-              })
-            }
-          }
-
-          readonly property bool taskRoutingOn: !!(root.config && root.config.taskRouting && root.config.taskRouting.enabled)
-
-          Column {
-            width: parent.width
-            spacing: Style.spacing.xs
-            opacity: parent.taskRoutingOn ? 1.0 : 0.48
-            enabled: parent.taskRoutingOn
-
-            Repeater {
-              model: [
-                { key: "general", label: strings.t("settings.task.general") },
-                { key: "vision", label: strings.t("settings.task.vision") },
-                { key: "text", label: strings.t("settings.task.text") },
-                { key: "translate", label: strings.t("settings.task.translate") }
-              ]
-              delegate: Rectangle {
-                width: panelColumn.width
-                radius: Math.min(4, root.cornerRadius)
-                color: Util.alpha(root.fgColor, 0.05)
-                border.width: 1
-                border.color: Util.alpha(root.fgColor, 0.14)
-                implicitHeight: taskCardCol.implicitHeight + Style.spacing.sm * 2
-
-                Column {
-                  id: taskCardCol
-                  anchors.left: parent.left
-                  anchors.right: parent.right
-                  anchors.top: parent.top
-                  anchors.margins: Style.spacing.sm
-                  spacing: Style.spacing.xs
-
-                  PlainText {
-                    text: modelData.label
-                    color: root.fgColor
-                    font.family: root.uiFont
-                    font.pixelSize: Style.font.bodySmall
-                    font.bold: true
-                  }
-
-                  Row {
-                    id: taskPickRow
-                    width: parent.width
-                    spacing: Style.spacing.xs
-
-                    Ui.Dropdown {
-                      width: (taskPickRow.width - taskPickRow.spacing) * 0.44
-                      showLabel: false
-                      value: root.taskProviderValue(modelData.key)
-                      options: [
-                        { value: "", label: strings.t("settings.useDefault") },
-                        { value: "auto", label: "Auto" },
-                        { value: "gemini", label: "Gemini" },
-                        { value: "anthropic", label: "Claude" },
-                        { value: "openai", label: "OpenAI" },
-                        { value: "ollama", label: "Ollama" },
-                        { value: "agent", label: "CLI Agent" }
-                      ]
-                      foreground: root.fgColor
-                      background: root.bgColor
-                      accent: root.accentColor
-                      onChanged: function(nextProv) {
-                        root.saveTaskRouting(modelData.key, { provider: nextProv, model: "" })
-                      }
-                    }
-
-                    Ui.Dropdown {
-                      width: (taskPickRow.width - taskPickRow.spacing) * 0.56
-                      showLabel: false
-                      value: root.taskModelValue(modelData.key)
-                      options: root.taskModelOptions(modelData.key)
-                      foreground: root.fgColor
-                      background: root.bgColor
-                      accent: root.accentColor
-                      onChanged: function(nextMod) {
-                        root.saveTaskRouting(modelData.key, { model: nextMod })
-                      }
-                    }
-                  }
-                }
-              }
-            }
-
-            // Continue in Agent CLI target
+            // Primary Capture button (Reel-style solid accent with subtle vertical shade)
             Rectangle {
-              width: panelColumn.width
+              id: captureBtn
+              anchors.verticalCenter: parent.verticalCenter
               radius: Math.min(4, root.cornerRadius)
-              color: Util.alpha(root.fgColor, 0.05)
-              border.width: 1
-              border.color: Util.alpha(root.fgColor, 0.14)
-              implicitHeight: handoffCardCol.implicitHeight + Style.spacing.sm * 2
+              implicitWidth: captureBtnRow.implicitWidth + Style.space(18)
+              implicitHeight: Style.space(28)
+              scale: captureMouse.pressed ? 0.98 : 1.0
+              Behavior on scale { NumberAnimation { duration: Style.duration(90); easing.type: Easing.OutCubic } }
 
-              Column {
-                id: handoffCardCol
+              gradient: Gradient {
+                GradientStop { position: 0.0; color: Qt.lighter(root.accentColor, captureHover.hovered ? 1.12 : 1.05) }
+                GradientStop { position: 1.0; color: Qt.darker(root.accentColor, 1.06) }
+              }
+
+              // Subtle 1 px top sheen highlight
+              Rectangle {
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.top: parent.top
-                anchors.margins: Style.spacing.sm
-                spacing: Style.spacing.xs
+                height: 1
+                color: "#33ffffff"
+              }
+
+              Row {
+                id: captureBtnRow
+                anchors.centerIn: parent
+                spacing: Style.space(6)
 
                 PlainText {
-                  text: strings.t("settings.task.handoff")
-                  color: root.fgColor
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "󰒅"
+                  color: root.onAccentInk
+                  font.family: root.uiFont
+                  font.pixelSize: Style.font.body
+                }
+
+                PlainText {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: strings.t("settings.captureNow")
+                  color: root.onAccentInk
                   font.family: root.uiFont
                   font.pixelSize: Style.font.bodySmall
                   font.bold: true
                 }
 
-                Ui.Dropdown {
-                  width: parent.width
-                  showLabel: false
-                  value: String((root.config && root.config.taskRouting && root.config.taskRouting.handoffAgent) || "default")
-                  options: [
-                    { value: "default", label: strings.t("settings.handoffDefault") },
-                    { value: "claude", label: "claude" },
-                    { value: "codex", label: "codex" },
-                    { value: "agy", label: "agy" },
-                    { value: "opencode", label: "opencode" },
-                    { value: "grok", label: "grok" },
-                    { value: "gemini", label: "gemini" }
-                  ]
-                  foreground: root.fgColor
-                  background: root.bgColor
-                  accent: root.accentColor
-                  onChanged: function(nextCli) {
-                    root.patchConfig({ taskRouting: { handoffAgent: nextCli } })
+                KeyCap {
+                  anchors.verticalCenter: parent.verticalCenter
+                  label: "c"
+                  capTextColor: root.onAccentInk
+                  capBg: Util.alpha(root.onAccentInk, 0.14)
+                  capBorder: Util.alpha(root.onAccentInk, 0.28)
+                }
+              }
+
+              HoverHandler { id: captureHover; cursorShape: Qt.PointingHandCursor }
+              MouseArea {
+                id: captureMouse
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.launchCapture()
+              }
+            }
+
+            // Quiet bare close button
+            Rectangle {
+              anchors.verticalCenter: parent.verticalCenter
+              width: Style.space(26)
+              height: Style.space(26)
+              radius: Math.min(4, root.cornerRadius)
+              color: closeHover.hovered ? root.hoverFill : "transparent"
+
+              PlainText {
+                anchors.centerIn: parent
+                text: "󰅖"
+                color: closeHover.hovered ? root.fgColor : root.mutedInk
+                font.family: root.uiFont
+                font.pixelSize: Style.font.body
+              }
+
+              HoverHandler { id: closeHover; cursorShape: Qt.PointingHandCursor }
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.close()
+              }
+            }
+          }
+        }
+
+        // ============================================================ FIXED UNDERLINED TAB STRIP
+        Item {
+          Layout.fillWidth: true
+          implicitHeight: Style.space(31)
+
+          Row {
+            id: tabStripRow
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            height: Style.space(30)
+
+            Repeater {
+              model: [
+                { id: "general",   icon: "󰒓", label: strings.t("settings.tab.general") },
+                { id: "providers", icon: "󰚩", label: strings.t("settings.tab.providers") },
+                { id: "tasks",     icon: "󰒋", label: strings.t("settings.tab.tasks") },
+                { id: "language",  icon: "󰗊", label: strings.t("settings.tab.language") }
+              ]
+              delegate: Item {
+                id: tabItem
+                required property var modelData
+                readonly property bool isActive: root.activeTab === modelData.id
+                width: tabStripRow.width / 4
+                height: tabStripRow.height
+
+                Row {
+                  anchors.centerIn: parent
+                  spacing: Style.space(5)
+
+                  PlainText {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: tabItem.modelData.icon
+                    color: tabItem.isActive ? root.accentColor : (tabHover.hovered ? root.fgColor : root.mutedInk)
+                    font.family: root.uiFont
+                    font.pixelSize: Style.font.bodySmall
+                  }
+
+                  PlainText {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: tabItem.modelData.label
+                    color: tabItem.isActive ? root.fgColor : (tabHover.hovered ? root.fgColor : Util.alpha(root.fgColor, 0.58))
+                    font.family: root.uiFont
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: tabItem.isActive
+                  }
+                }
+
+                // Active 2 px accent underline (inset) / subtle hover hairline
+                Rectangle {
+                  anchors.bottom: parent.bottom
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.leftMargin: Style.space(12)
+                  anchors.rightMargin: Style.space(12)
+                  height: tabItem.isActive ? 2 : (tabHover.hovered ? 1 : 0)
+                  color: tabItem.isActive ? root.accentColor : Util.alpha(root.fgColor, 0.34)
+                }
+
+                HoverHandler { id: tabHover; cursorShape: Qt.PointingHandCursor }
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: {
+                    root.activeTab = tabItem.modelData.id
+                    bodyFlick.contentY = 0
                   }
                 }
               }
             }
           }
+
+          Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: 1
+            color: root.hairline
+          }
         }
 
-        // ============================================================ LANGUAGE & OCR TAB
-        Column {
-          visible: root.activeTab === "language"
-          width: parent.width
-          spacing: Style.spacing.sm
+        // ============================================================ SCROLLABLE BODY
+        Item {
+          Layout.fillWidth: true
+          Layout.fillHeight: true
+          clip: true
 
-          Ui.PanelSectionHeader {
-            text: strings.t("settings.translateLanguage")
-            foreground: root.fgColor
-          }
+          Flickable {
+            id: bodyFlick
+            anchors.fill: parent
+            contentWidth: width
+            contentHeight: bodyStack.implicitHeight + Style.space(8)
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
 
-          Flow {
-            width: parent.width
-            spacing: Style.spacing.xs
+            Column {
+              id: bodyStack
+              width: bodyFlick.width
+              spacing: Style.space(12)
 
-            Repeater {
-              model: ["English", "Spanish", "French", "German", "Portuguese", "Italian", "Japanese", "Chinese", "Korean"]
-              delegate: Ui.Button {
-                foreground: root.fgColor
-                text: modelData
-                fontSize: Style.font.bodySmall
-                bordered: true
-                selected: root.cfgVal("translateLanguage", "English") === modelData
-                onClicked: root.patchConfig({ translateLanguage: modelData })
+              // ------------------------------------------------------ GENERAL TAB
+              Column {
+                visible: root.activeTab === "general"
+                width: parent.width
+                spacing: Style.space(10)
+
+                SectionLabel { text: strings.t("settings.section.keybind").toUpperCase() }
+
+                SectionCard {
+                  width: parent.width
+                  implicitHeight: hotkeyCardCol.implicitHeight
+
+                  Column {
+                    id: hotkeyCardCol
+                    width: parent.width
+
+                    Item {
+                      width: parent.width
+                      implicitHeight: keybindRow.implicitHeight + Style.space(16)
+
+                      Row {
+                        id: keybindRow
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: Style.space(10)
+                        anchors.rightMargin: Style.space(10)
+                        spacing: Style.space(6)
+
+                        Ui.TextField {
+                          id: keybindInput
+                          width: keybindRow.width - applyKbBtn.implicitWidth - keybindRow.spacing
+                          text: root.keybindDraft
+                          placeholderText: "SUPER + ALT + A"
+                          foreground: root.fgColor
+                          accent: root.accentColor
+                          onTextEdited: root.keybindDraft = text
+                          onAccepted: root.applyKeybind()
+                          Keys.onEscapePressed: root.close()
+                        }
+
+                        Ui.Button {
+                          id: applyKbBtn
+                          foreground: root.fgColor
+                          anchors.verticalCenter: parent.verticalCenter
+                          text: strings.t("settings.apply")
+                          fontSize: Style.font.bodySmall
+                          bordered: true
+                          selected: true
+                          onClicked: root.applyKeybind()
+                        }
+                      }
+                    }
+
+                    CardDivider { width: parent.width }
+
+                    Item {
+                      width: parent.width
+                      implicitHeight: Math.max(Style.space(38), rebindLabel.implicitHeight + Style.space(14))
+
+                      PlainText {
+                        id: rebindLabel
+                        anchors.left: parent.left
+                        anchors.right: rebindSwitch.left
+                        anchors.leftMargin: Style.space(10)
+                        anchors.rightMargin: Style.space(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: strings.t("settings.rebindHint")
+                        color: root.secondaryInk
+                        font.family: root.uiFont
+                        font.pixelSize: Style.font.caption
+                        wrapMode: Text.Wrap
+                      }
+
+                      Ui.ToggleSwitch {
+                        id: rebindSwitch
+                        anchors.right: parent.right
+                        anchors.rightMargin: Style.space(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        checked: root.rebindExisting
+                        foreground: root.fgColor
+                        accent: root.accentColor
+                        onToggled: root.rebindExisting = !root.rebindExisting
+                      }
+                    }
+                  }
+                }
+
+                SectionLabel { text: strings.t("settings.section.appearance").toUpperCase() }
+
+                SectionCard {
+                  width: parent.width
+                  implicitHeight: Style.space(42)
+
+                  PlainText {
+                    anchors.left: parent.left
+                    anchors.leftMargin: Style.space(10)
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: strings.t("settings.section.appearance")
+                    color: root.fgColor
+                    font.family: root.uiFont
+                    font.pixelSize: Style.font.bodySmall
+                  }
+
+                  Row {
+                    anchors.right: parent.right
+                    anchors.rightMargin: Style.space(10)
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: Style.space(4)
+
+                    Repeater {
+                      model: [
+                        { id: "system", label: strings.t("settings.theme.system") },
+                        { id: "dark",   label: strings.t("settings.theme.dark") },
+                        { id: "light",  label: strings.t("settings.theme.light") }
+                      ]
+                      delegate: PillOption {
+                        required property var modelData
+                        label: modelData.label
+                        active: root.cfgVal("theme", "system") === modelData.id
+                        onClicked: root.patchConfig({ theme: modelData.id })
+                      }
+                    }
+                  }
+                }
+
+                SectionLabel { text: strings.t("settings.section.capture").toUpperCase() }
+
+                SectionCard {
+                  width: parent.width
+                  implicitHeight: captureCardCol.implicitHeight
+
+                  Column {
+                    id: captureCardCol
+                    width: parent.width
+
+                    Item {
+                      width: parent.width
+                      implicitHeight: Style.space(42)
+
+                      PlainText {
+                        anchors.left: parent.left
+                        anchors.leftMargin: Style.space(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: strings.t("settings.section.capture")
+                        color: root.fgColor
+                        font.family: root.uiFont
+                        font.pixelSize: Style.font.bodySmall
+                      }
+
+                      Row {
+                        anchors.right: parent.right
+                        anchors.rightMargin: Style.space(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Style.space(4)
+
+                        PillOption {
+                          icon: "󰒅"
+                          label: strings.t("mode.lasso")
+                          active: root.cfgVal("defaultMode", "lasso") === "lasso"
+                          onClicked: root.patchConfig({ defaultMode: "lasso" })
+                        }
+
+                        PillOption {
+                          icon: "󰗧"
+                          label: strings.t("mode.text")
+                          active: root.cfgVal("defaultMode", "lasso") === "text"
+                          onClicked: root.patchConfig({ defaultMode: "text" })
+                        }
+                      }
+                    }
+
+                    CardDivider { width: parent.width }
+
+                    Item {
+                      width: parent.width
+                      implicitHeight: Style.space(42)
+
+                      PlainText {
+                        anchors.left: parent.left
+                        anchors.leftMargin: Style.space(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: strings.t("settings.maxImageDim")
+                        color: root.fgColor
+                        font.family: root.uiFont
+                        font.pixelSize: Style.font.bodySmall
+                      }
+
+                      Row {
+                        anchors.right: parent.right
+                        anchors.rightMargin: Style.space(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Style.space(4)
+
+                        Repeater {
+                          model: [1280, 1920, 2560, 3840]
+                          delegate: PillOption {
+                            required property int modelData
+                            label: String(modelData) + "px"
+                            fontSize: Style.font.caption
+                            active: Number(root.cfgVal("maxImageDim", 1920)) === modelData
+                            onClicked: root.patchConfig({ maxImageDim: modelData })
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+
+              // ------------------------------------------------------ PROVIDERS TAB
+              Column {
+                visible: root.activeTab === "providers"
+                width: parent.width
+                spacing: Style.space(10)
+
+                SectionLabel { text: strings.t("settings.defaultProvider").toUpperCase() }
+
+                SectionCard {
+                  width: parent.width
+                  implicitHeight: defaultProvFlow.implicitHeight + Style.space(16)
+
+                  Flow {
+                    id: defaultProvFlow
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: Style.space(8)
+                    spacing: Style.space(5)
+
+                    Repeater {
+                      model: [
+                        { id: "auto",      label: "Auto" },
+                        { id: "gemini",    label: "Gemini" },
+                        { id: "anthropic", label: "Claude" },
+                        { id: "openai",    label: "OpenAI" },
+                        { id: "ollama",    label: "Ollama" },
+                        { id: "agent",     label: "CLI Agent" }
+                      ]
+                      delegate: PillOption {
+                        required property var modelData
+                        label: modelData.label
+                        active: root.cfgVal("defaultProvider", "auto") === modelData.id
+                        onClicked: root.patchConfig({ defaultProvider: modelData.id })
+                      }
+                    }
+                  }
+                }
+
+                SectionLabel { text: strings.t("settings.configuredProviders").toUpperCase() }
+
+                // Provider selector strip with live configured status dots
+                Flow {
+                  width: parent.width
+                  spacing: Style.space(5)
+
+                  Repeater {
+                    model: [
+                      { id: "gemini",    label: "Gemini" },
+                      { id: "anthropic", label: "Claude" },
+                      { id: "openai",    label: "OpenAI" },
+                      { id: "ollama",    label: "Ollama" },
+                      { id: "agent",     label: "CLI Agent" }
+                    ]
+                    delegate: PillOption {
+                      required property var modelData
+                      label: modelData.label
+                      fontSize: Style.font.caption
+                      showDot: true
+                      dotReady: root.providerReady(modelData.id)
+                      active: root.selectedProvider === modelData.id
+                      onClicked: root.selectProvider(modelData.id)
+                    }
+                  }
+                }
+
+                // Active provider detail editor card
+                SectionCard {
+                  width: parent.width
+                  border.color: Util.alpha(root.accentColor, 0.32)
+                  implicitHeight: providerEditorCol.implicitHeight + Style.space(20)
+
+                  Column {
+                    id: providerEditorCol
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: Style.space(10)
+                    spacing: Style.space(8)
+
+                    // Provider title + status + Get key + Test
+                    Item {
+                      width: parent.width
+                      implicitHeight: Math.max(provTitleCol.implicitHeight, provActionsRow.implicitHeight)
+
+                      Column {
+                        id: provTitleCol
+                        anchors.left: parent.left
+                        anchors.right: provActionsRow.left
+                        anchors.rightMargin: Style.space(8)
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Style.space(2)
+
+                        PlainText {
+                          text: String(root.currentProviderMeta().name || root.selectedProvider)
+                          color: root.fgColor
+                          font.family: root.uiFont
+                          font.pixelSize: Style.font.body
+                          font.bold: true
+                        }
+
+                        Row {
+                          spacing: Style.space(5)
+
+                          Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: Style.space(6)
+                            height: Style.space(6)
+                            radius: width / 2
+                            color: root.providerReady(root.selectedProvider) ? root.accentColor : "transparent"
+                            border.width: root.providerReady(root.selectedProvider) ? 0 : 1
+                            border.color: root.mutedInk
+                          }
+
+                          PlainText {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: root.providerStatusBadge(root.selectedProvider)
+                            color: root.providerReady(root.selectedProvider) ? root.accentColor : root.mutedInk
+                            font.family: root.uiFont
+                            font.pixelSize: Style.font.caption
+                            elide: Text.ElideRight
+                          }
+                        }
+                      }
+
+                      Row {
+                        id: provActionsRow
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: Style.space(5)
+
+                        Ui.Button {
+                          foreground: root.fgColor
+                          visible: String(root.currentProviderMeta().keyUrl || "").length > 0
+                          text: strings.t("settings.getApiKey")
+                          fontSize: Style.font.caption
+                          bordered: true
+                          onClicked: root.openKeyConsole(root.selectedProvider)
+                        }
+
+                        Ui.Button {
+                          foreground: root.fgColor
+                          text: root.testingProvider ? strings.t("settings.testing") : strings.t("settings.testConnection")
+                          iconText: "󰙨"
+                          iconSpinning: root.testingProvider
+                          fontSize: Style.font.caption
+                          bordered: true
+                          selected: true
+                          onClicked: root.testSelectedProvider()
+                        }
+                      }
+                    }
+
+                    // Inline test result pill
+                    Rectangle {
+                      visible: root.providerTestText.length > 0
+                      width: parent.width
+                      radius: Math.min(3, root.cornerRadius)
+                      color: root.providerTestOk ? Util.alpha(root.accentColor, 0.12) : Util.alpha(root.urgentColor, 0.14)
+                      border.width: 1
+                      border.color: root.providerTestOk ? Util.alpha(root.accentColor, 0.36) : Util.alpha(root.urgentColor, 0.45)
+                      implicitHeight: provTestLabel.implicitHeight + Style.space(10)
+
+                      PlainText {
+                        id: provTestLabel
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: Style.space(8)
+                        anchors.rightMargin: Style.space(8)
+                        text: root.providerTestText
+                        color: root.providerTestOk ? root.accentColor : root.urgentColor
+                        font.family: root.uiFont
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                        wrapMode: Text.Wrap
+                      }
+                    }
+
+                    CardDivider { width: parent.width }
+
+                    // Model dropdown + refresh button
+                    Row {
+                      id: modelRow
+                      width: parent.width
+                      spacing: Style.space(6)
+
+                      Ui.Dropdown {
+                        width: modelRow.width - refreshModelsBtn.implicitWidth - modelRow.spacing
+                        label: strings.t("settings.modelLabel")
+                        value: String(root.currentProviderCfg().model || root.currentProviderMeta().defaultModel || "")
+                        options: root.currentProviderModels()
+                        foreground: root.fgColor
+                        background: root.bgColor
+                        accent: root.accentColor
+                        onChanged: function(nextModel) {
+                          root.saveProviderField(root.selectedProvider, { model: nextModel })
+                        }
+                      }
+
+                      Ui.Button {
+                        id: refreshModelsBtn
+                        foreground: root.fgColor
+                        anchors.bottom: parent.bottom
+                        iconText: "󰑐"
+                        iconSpinning: root.refreshingModels
+                        bordered: true
+                        tooltipText: strings.t("settings.refreshModels")
+                        onClicked: root.refreshModelsFor(root.selectedProvider)
+                      }
+                    }
+
+                    // Custom model ID override
+                    Row {
+                      id: customModelRow
+                      width: parent.width
+                      spacing: Style.space(6)
+
+                      Ui.TextField {
+                        width: customModelRow.width - saveModelBtn.implicitWidth - customModelRow.spacing
+                        text: root.customModelDraft
+                        placeholderText: strings.t("settings.customModelPlaceholder")
+                        foreground: root.fgColor
+                        accent: root.accentColor
+                        onTextEdited: root.customModelDraft = text
+                        onAccepted: {
+                          var m = root.customModelDraft.trim()
+                          if (m) {
+                            root.saveProviderField(root.selectedProvider, { model: m })
+                            root.customModelDraft = ""
+                          }
+                        }
+                        Keys.onEscapePressed: root.close()
+                      }
+
+                      Ui.Button {
+                        id: saveModelBtn
+                        foreground: root.fgColor
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: strings.t("settings.save")
+                        fontSize: Style.font.caption
+                        bordered: true
+                        onClicked: {
+                          var m = root.customModelDraft.trim()
+                          if (m) {
+                            root.saveProviderField(root.selectedProvider, { model: m })
+                            root.customModelDraft = ""
+                          }
+                        }
+                      }
+                    }
+
+                    // Masked API key editor (Gemini / Anthropic / OpenAI)
+                    Column {
+                      visible: root.currentProviderMeta().requiresKey === true
+                      width: parent.width
+                      spacing: Style.space(5)
+
+                      CardDivider { width: parent.width }
+
+                      PlainText {
+                        text: strings.t("settings.apiKeyLabel")
+                        color: root.secondaryInk
+                        font.family: root.uiFont
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                      }
+
+                      Row {
+                        id: apiKeyRow
+                        width: parent.width
+                        spacing: Style.space(6)
+
+                        Ui.TextField {
+                          width: apiKeyRow.width - saveKeyBtn.implicitWidth - (clearKeyBtn.visible ? clearKeyBtn.implicitWidth + apiKeyRow.spacing : 0) - apiKeyRow.spacing
+                          password: true
+                          text: root.apiKeyDraft
+                          placeholderText: root.currentProviderCfg().hasKey
+                            ? strings.t("settings.apiKeySavedPlaceholder").arg(String(root.currentProviderCfg().maskedKey || "••••"))
+                            : strings.t("settings.apiKeyPlaceholder")
+                          foreground: root.fgColor
+                          accent: root.accentColor
+                          onTextEdited: root.apiKeyDraft = text
+                          onAccepted: {
+                            var k = root.apiKeyDraft.trim()
+                            if (k) {
+                              root.saveProviderField(root.selectedProvider, { apiKey: k })
+                              root.apiKeyDraft = ""
+                            }
+                          }
+                          Keys.onEscapePressed: root.close()
+                        }
+
+                        Ui.Button {
+                          id: saveKeyBtn
+                          foreground: root.fgColor
+                          anchors.verticalCenter: parent.verticalCenter
+                          text: strings.t("settings.save")
+                          fontSize: Style.font.caption
+                          bordered: true
+                          selected: root.apiKeyDraft.trim().length > 0
+                          onClicked: {
+                            var k = root.apiKeyDraft.trim()
+                            if (k) {
+                              root.saveProviderField(root.selectedProvider, { apiKey: k })
+                              root.apiKeyDraft = ""
+                            }
+                          }
+                        }
+
+                        Ui.Button {
+                          id: clearKeyBtn
+                          foreground: root.fgColor
+                          visible: root.currentProviderCfg().hasKey === true
+                          anchors.verticalCenter: parent.verticalCenter
+                          text: strings.t("settings.clear")
+                          fontSize: Style.font.caption
+                          bordered: true
+                          onClicked: {
+                            root.apiKeyDraft = ""
+                            root.saveProviderField(root.selectedProvider, { apiKey: "" })
+                          }
+                        }
+                      }
+                    }
+
+                    // Ollama server URL editor
+                    Column {
+                      visible: root.selectedProvider === "ollama"
+                      width: parent.width
+                      spacing: Style.space(5)
+
+                      CardDivider { width: parent.width }
+
+                      PlainText {
+                        text: strings.t("settings.ollamaHostLabel")
+                        color: root.secondaryInk
+                        font.family: root.uiFont
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                      }
+
+                      Row {
+                        id: ollamaRow
+                        width: parent.width
+                        spacing: Style.space(6)
+
+                        Ui.TextField {
+                          width: ollamaRow.width - saveOllamaBtn.implicitWidth - ollamaRow.spacing
+                          text: root.ollamaHostDraft
+                          placeholderText: "http://127.0.0.1:11434"
+                          foreground: root.fgColor
+                          accent: root.accentColor
+                          onTextEdited: root.ollamaHostDraft = text
+                          onAccepted: root.saveProviderField("ollama", { host: root.ollamaHostDraft.trim() })
+                          Keys.onEscapePressed: root.close()
+                        }
+
+                        Ui.Button {
+                          id: saveOllamaBtn
+                          foreground: root.fgColor
+                          anchors.verticalCenter: parent.verticalCenter
+                          text: strings.t("settings.save")
+                          fontSize: Style.font.caption
+                          bordered: true
+                          onClicked: root.saveProviderField("ollama", { host: root.ollamaHostDraft.trim() })
+                        }
+                      }
+                    }
+
+                    // Omarchy CLI agent selector
+                    Column {
+                      visible: root.selectedProvider === "agent"
+                      width: parent.width
+                      spacing: Style.space(5)
+
+                      CardDivider { width: parent.width }
+
+                      PlainText {
+                        text: strings.t("settings.cliAgentLabel")
+                        color: root.secondaryInk
+                        font.family: root.uiFont
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                      }
+
+                      Flow {
+                        width: parent.width
+                        spacing: Style.space(5)
+
+                        Repeater {
+                          model: Array.isArray(root.currentProviderMeta().clis)
+                            ? root.currentProviderMeta().clis
+                            : ["default", "claude", "codex", "agy", "opencode", "grok", "gemini"]
+                          delegate: PillOption {
+                            required property string modelData
+                            label: modelData
+                            fontSize: Style.font.caption
+                            active: String(root.currentProviderCfg().cli || "default") === modelData
+                            onClicked: root.selectAgentCli(modelData)
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+
+              // ------------------------------------------------------ TASKS TAB
+              Column {
+                id: tasksTabCol
+                visible: root.activeTab === "tasks"
+                width: parent.width
+                spacing: Style.space(10)
+                readonly property bool taskRoutingOn: !!(root.config && root.config.taskRouting && root.config.taskRouting.enabled)
+
+                SectionLabel { text: "PER-TASK ROUTING" }
+
+                SectionCard {
+                  width: parent.width
+                  implicitHeight: routingCardCol.implicitHeight
+
+                  Column {
+                    id: routingCardCol
+                    width: parent.width
+
+                    Item {
+                      width: parent.width
+                      implicitHeight: Style.space(40)
+
+                      PlainText {
+                        id: routingLabel
+                        anchors.left: parent.left
+                        anchors.right: routingSwitch.left
+                        anchors.leftMargin: Style.space(10)
+                        anchors.rightMargin: Style.space(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: strings.t("settings.enableTaskRouting")
+                        color: root.fgColor
+                        font.family: root.uiFont
+                        font.pixelSize: Style.font.bodySmall
+                        font.bold: true
+                      }
+
+                      Ui.ToggleSwitch {
+                        id: routingSwitch
+                        anchors.right: parent.right
+                        anchors.rightMargin: Style.space(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        checked: tasksTabCol.taskRoutingOn
+                        foreground: root.fgColor
+                        accent: root.accentColor
+                        onToggled: root.patchConfig({
+                          taskRouting: { enabled: !tasksTabCol.taskRoutingOn }
+                        })
+                      }
+                    }
+
+                    Repeater {
+                      model: [
+                        { key: "general",   label: strings.t("settings.task.general") },
+                        { key: "vision",    label: strings.t("settings.task.vision") },
+                        { key: "text",      label: strings.t("settings.task.text") },
+                        { key: "translate", label: strings.t("settings.task.translate") }
+                      ]
+                      delegate: Column {
+                        required property var modelData
+                        width: routingCardCol.width
+                        opacity: tasksTabCol.taskRoutingOn ? 1.0 : 0.42
+                        enabled: tasksTabCol.taskRoutingOn
+
+                        CardDivider { width: parent.width }
+
+                        Column {
+                          width: parent.width - Style.space(20)
+                          x: Style.space(10)
+                          topPadding: Style.space(8)
+                          bottomPadding: Style.space(8)
+                          spacing: Style.space(5)
+
+                          PlainText {
+                            text: modelData.label
+                            color: root.secondaryInk
+                            font.family: root.uiFont
+                            font.pixelSize: Style.font.caption
+                            font.bold: true
+                          }
+
+                          Row {
+                            id: taskPickRow
+                            width: parent.width
+                            spacing: Style.space(6)
+
+                            Ui.Dropdown {
+                              width: (taskPickRow.width - taskPickRow.spacing) * 0.42
+                              showLabel: false
+                              value: root.taskProviderValue(modelData.key)
+                              options: [
+                                { value: "", label: strings.t("settings.useDefault") },
+                                { value: "auto", label: "Auto" },
+                                { value: "gemini", label: "Gemini" },
+                                { value: "anthropic", label: "Claude" },
+                                { value: "openai", label: "OpenAI" },
+                                { value: "ollama", label: "Ollama" },
+                                { value: "agent", label: "CLI Agent" }
+                              ]
+                              foreground: root.fgColor
+                              background: root.bgColor
+                              accent: root.accentColor
+                              onChanged: function(nextProv) {
+                                root.saveTaskRouting(modelData.key, { provider: nextProv, model: "" })
+                              }
+                            }
+
+                            Ui.Dropdown {
+                              width: (taskPickRow.width - taskPickRow.spacing) * 0.58
+                              showLabel: false
+                              value: root.taskModelValue(modelData.key)
+                              options: root.taskModelOptions(modelData.key)
+                              foreground: root.fgColor
+                              background: root.bgColor
+                              accent: root.accentColor
+                              onChanged: function(nextMod) {
+                                root.saveTaskRouting(modelData.key, { model: nextMod })
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+
+                SectionLabel { text: strings.t("settings.task.handoff").toUpperCase() }
+
+                SectionCard {
+                  width: parent.width
+                  implicitHeight: handoffCardCol.implicitHeight + Style.space(16)
+
+                  Column {
+                    id: handoffCardCol
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: Style.space(8)
+                    spacing: Style.space(5)
+
+                    Ui.Dropdown {
+                      width: parent.width
+                      showLabel: false
+                      value: String((root.config && root.config.taskRouting && root.config.taskRouting.handoffAgent) || "default")
+                      options: [
+                        { value: "default", label: strings.t("settings.handoffDefault") },
+                        { value: "claude", label: "claude" },
+                        { value: "codex", label: "codex" },
+                        { value: "agy", label: "agy" },
+                        { value: "opencode", label: "opencode" },
+                        { value: "grok", label: "grok" },
+                        { value: "gemini", label: "gemini" }
+                      ]
+                      foreground: root.fgColor
+                      background: root.bgColor
+                      accent: root.accentColor
+                      onChanged: function(nextCli) {
+                        root.patchConfig({ taskRouting: { handoffAgent: nextCli } })
+                      }
+                    }
+                  }
+                }
+              }
+
+              // ------------------------------------------------------ LANGUAGE & OCR TAB
+              Column {
+                visible: root.activeTab === "language"
+                width: parent.width
+                spacing: Style.space(10)
+
+                SectionLabel { text: strings.t("settings.translateLanguage").toUpperCase() }
+
+                SectionCard {
+                  width: parent.width
+                  implicitHeight: translateCardCol.implicitHeight
+
+                  Column {
+                    id: translateCardCol
+                    width: parent.width
+
+                    Item {
+                      width: parent.width
+                      implicitHeight: translateFlow.implicitHeight + Style.space(16)
+
+                      Flow {
+                        id: translateFlow
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: Style.space(8)
+                        spacing: Style.space(5)
+
+                        Repeater {
+                          model: ["English", "Spanish", "French", "German", "Portuguese", "Italian", "Japanese", "Chinese", "Korean"]
+                          delegate: PillOption {
+                            required property string modelData
+                            label: modelData
+                            active: root.cfgVal("translateLanguage", "English") === modelData
+                            onClicked: root.patchConfig({ translateLanguage: modelData })
+                          }
+                        }
+                      }
+                    }
+
+                    CardDivider { width: parent.width }
+
+                    Item {
+                      width: parent.width
+                      implicitHeight: customLangRow.implicitHeight + Style.space(16)
+
+                      Row {
+                        id: customLangRow
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.leftMargin: Style.space(8)
+                        anchors.rightMargin: Style.space(8)
+                        spacing: Style.space(6)
+
+                        Ui.TextField {
+                          width: customLangRow.width - saveCustomLangBtn.implicitWidth - customLangRow.spacing
+                          text: root.customTranslateLangDraft
+                          placeholderText: strings.t("settings.customLangPlaceholder")
+                          foreground: root.fgColor
+                          accent: root.accentColor
+                          onTextEdited: root.customTranslateLangDraft = text
+                          onAccepted: {
+                            var lang = root.customTranslateLangDraft.trim()
+                            if (lang) {
+                              root.patchConfig({ translateLanguage: lang })
+                              root.customTranslateLangDraft = ""
+                            }
+                          }
+                          Keys.onEscapePressed: root.close()
+                        }
+
+                        Ui.Button {
+                          id: saveCustomLangBtn
+                          foreground: root.fgColor
+                          anchors.verticalCenter: parent.verticalCenter
+                          text: strings.t("settings.save")
+                          fontSize: Style.font.caption
+                          bordered: true
+                          onClicked: {
+                            var lang = root.customTranslateLangDraft.trim()
+                            if (lang) {
+                              root.patchConfig({ translateLanguage: lang })
+                              root.customTranslateLangDraft = ""
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+
+                SectionLabel { text: strings.t("settings.ocrLanguages").toUpperCase() }
+
+                SectionCard {
+                  width: parent.width
+                  implicitHeight: ocrCardCol.implicitHeight
+
+                  Column {
+                    id: ocrCardCol
+                    width: parent.width
+
+                    Column {
+                      width: parent.width - Style.space(16)
+                      x: Style.space(8)
+                      topPadding: Style.space(8)
+                      bottomPadding: Style.space(8)
+                      spacing: Style.space(6)
+
+                      PlainText {
+                        width: parent.width
+                        text: strings.t("settings.ocrToggleHint")
+                        color: root.secondaryInk
+                        font.family: root.uiFont
+                        font.pixelSize: Style.font.caption
+                        wrapMode: Text.Wrap
+                      }
+
+                      Flow {
+                        width: parent.width
+                        spacing: Style.space(5)
+
+                        Repeater {
+                          model: root.ocrInstalled
+                          delegate: PillOption {
+                            required property var modelData
+                            label: modelData.name + " (" + modelData.code + ")"
+                            icon: root.isOcrLangActive(modelData.code) ? "󰄬" : ""
+                            active: root.isOcrLangActive(modelData.code)
+                            onClicked: root.toggleOcrLang(modelData.code)
+                          }
+                        }
+                      }
+                    }
+
+                    CardDivider {
+                      visible: root.ocrAvailable.length > 0
+                      width: parent.width
+                    }
+
+                    Column {
+                      visible: root.ocrAvailable.length > 0
+                      width: parent.width - Style.space(16)
+                      x: Style.space(8)
+                      topPadding: Style.space(8)
+                      bottomPadding: Style.space(8)
+                      spacing: Style.space(6)
+
+                      PlainText {
+                        text: strings.t("settings.ocrDownloadSection")
+                        color: root.secondaryInk
+                        font.family: root.uiFont
+                        font.pixelSize: Style.font.caption
+                        font.bold: true
+                      }
+
+                      Row {
+                        id: ocrInstallRow
+                        width: parent.width
+                        spacing: Style.space(6)
+
+                        Ui.Dropdown {
+                          width: ocrInstallRow.width - ocrInstallBtn.implicitWidth - ocrInstallRow.spacing
+                          showLabel: false
+                          value: root.selectedOcrInstallCode
+                          options: root.ocrAvailableOptions()
+                          foreground: root.fgColor
+                          background: root.bgColor
+                          accent: root.accentColor
+                          onChanged: function(nextCode) {
+                            root.selectedOcrInstallCode = nextCode
+                          }
+                        }
+
+                        Ui.Button {
+                          id: ocrInstallBtn
+                          foreground: root.fgColor
+                          anchors.verticalCenter: parent.verticalCenter
+                          text: root.installingOcrPack ? strings.t("settings.installing") : strings.t("settings.installPack")
+                          iconText: "󰇚"
+                          iconSpinning: root.installingOcrPack
+                          fontSize: Style.font.caption
+                          bordered: true
+                          selected: true
+                          onClicked: root.installSelectedOcrPack()
+                        }
+                      }
+
+                      PlainText {
+                        visible: root.selectedOcrInstallCode.length > 0
+                        width: parent.width
+                        text: strings.t("settings.ocrCliHint").arg("omarchy pkg add tesseract-data-" + root.selectedOcrInstallCode)
+                        color: root.mutedInk
+                        font.family: root.uiFont
+                        font.pixelSize: Style.font.caption
+                        wrapMode: Text.Wrap
+                      }
+                    }
+                  }
+                }
               }
             }
+          }
+
+          // Floating Reel-style toast card (never shifts layout)
+          Rectangle {
+            id: toastCard
+            z: 20
+            visible: root.statusText.length > 0
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: Style.space(4)
+            radius: root.cornerRadius
+            color: root.bgColor
+            border.width: 1
+            border.color: root.statusError ? Util.alpha(root.urgentColor, 0.55) : Util.alpha(root.accentColor, 0.45)
+            clip: true
+            implicitHeight: toastBodyText.implicitHeight + Style.space(18)
+
+            Rectangle {
+              anchors.left: parent.left
+              anchors.top: parent.top
+              anchors.bottom: parent.bottom
+              width: Style.space(3)
+              color: root.statusError ? root.urgentColor : root.accentColor
+            }
+
+            PlainText {
+              id: toastBodyText
+              anchors.left: parent.left
+              anchors.right: toastCloseBtn.left
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.leftMargin: Style.space(12)
+              anchors.rightMargin: Style.space(6)
+              text: root.statusText
+              color: root.statusError ? root.urgentColor : root.fgColor
+              font.family: root.uiFont
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.Wrap
+            }
+
+            Rectangle {
+              id: toastCloseBtn
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(6)
+              anchors.verticalCenter: parent.verticalCenter
+              width: Style.space(22)
+              height: Style.space(22)
+              radius: Math.min(3, root.cornerRadius)
+              color: toastCloseHover.hovered ? root.hoverFill : "transparent"
+
+              PlainText {
+                anchors.centerIn: parent
+                text: "󰅖"
+                color: toastCloseHover.hovered ? root.fgColor : root.mutedInk
+                font.family: root.uiFont
+                font.pixelSize: Style.font.caption
+              }
+
+              HoverHandler { id: toastCloseHover; cursorShape: Qt.PointingHandCursor }
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  statusClearTimer.stop()
+                  root.statusText = ""
+                  root.statusError = false
+                }
+              }
+            }
+          }
+        }
+
+        // ============================================================ FIXED KEYHINT FOOTER
+        Item {
+          Layout.fillWidth: true
+          implicitHeight: Style.space(24)
+
+          Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            height: 1
+            color: root.hairline
           }
 
           Row {
-            id: customLangRow
-            width: parent.width
-            spacing: Style.spacing.xs
+            anchors.left: parent.left
+            anchors.bottom: parent.bottom
+            spacing: Style.space(10)
 
-            Ui.TextField {
-              width: customLangRow.width - saveCustomLangBtn.implicitWidth - customLangRow.spacing
-              text: root.customTranslateLangDraft
-              placeholderText: strings.t("settings.customLangPlaceholder")
-              foreground: root.fgColor
-              accent: root.accentColor
-              onTextEdited: root.customTranslateLangDraft = text
-              onAccepted: {
-                var lang = root.customTranslateLangDraft.trim()
-                if (lang) {
-                  root.patchConfig({ translateLanguage: lang })
-                  root.customTranslateLangDraft = ""
-                }
-              }
-              Keys.onEscapePressed: root.close()
-            }
-
-            Ui.Button {
-              id: saveCustomLangBtn
-              foreground: root.fgColor
-              anchors.verticalCenter: parent.verticalCenter
-              text: strings.t("settings.save")
-              fontSize: Style.font.caption
-              bordered: true
-              onClicked: {
-                var lang = root.customTranslateLangDraft.trim()
-                if (lang) {
-                  root.patchConfig({ translateLanguage: lang })
-                  root.customTranslateLangDraft = ""
-                }
-              }
-            }
-          }
-
-          Ui.PanelSectionHeader {
-            text: strings.t("settings.ocrLanguages")
-            foreground: root.fgColor
-          }
-
-          PlainText {
-            width: parent.width
-            text: strings.t("settings.ocrToggleHint")
-            color: Util.alpha(root.fgColor, 0.72)
-            font.family: root.uiFont
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.Wrap
-          }
-
-          Flow {
-            width: parent.width
-            spacing: Style.spacing.xs
-
-            Repeater {
-              model: root.ocrInstalled
-              delegate: Ui.Button {
-                foreground: root.fgColor
-                text: modelData.name + " (" + modelData.code + ")"
-                iconText: root.isOcrLangActive(modelData.code) ? "󰄬" : ""
-                fontSize: Style.font.bodySmall
-                bordered: true
-                selected: root.isOcrLangActive(modelData.code)
-                onClicked: root.toggleOcrLang(modelData.code)
-              }
-            }
-          }
-
-          Ui.PanelSectionHeader {
-            visible: root.ocrAvailable.length > 0
-            text: strings.t("settings.ocrDownloadSection")
-            foreground: root.fgColor
-          }
-
-          Row {
-            id: ocrInstallRow
-            visible: root.ocrAvailable.length > 0
-            width: parent.width
-            spacing: Style.spacing.xs
-
-            Ui.Dropdown {
-              width: ocrInstallRow.width - ocrInstallBtn.implicitWidth - ocrInstallRow.spacing
-              showLabel: false
-              value: root.selectedOcrInstallCode
-              options: root.ocrAvailableOptions()
-              foreground: root.fgColor
-              background: root.bgColor
-              accent: root.accentColor
-              onChanged: function(nextCode) {
-                root.selectedOcrInstallCode = nextCode
+            Row {
+              spacing: Style.space(4)
+              KeyCap { anchors.verticalCenter: parent.verticalCenter; label: "Tab" }
+              PlainText {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Tabs"
+                color: root.mutedInk
+                font.family: root.uiFont
+                font.pixelSize: Style.font.caption
               }
             }
 
-            Ui.Button {
-              id: ocrInstallBtn
-              foreground: root.fgColor
-              anchors.verticalCenter: parent.verticalCenter
-              text: root.installingOcrPack ? strings.t("settings.installing") : strings.t("settings.installPack")
-              iconText: "󰇚"
-              iconSpinning: root.installingOcrPack
-              fontSize: Style.font.caption
-              bordered: true
-              selected: true
-              onClicked: root.installSelectedOcrPack()
+            Row {
+              spacing: Style.space(4)
+              KeyCap { anchors.verticalCenter: parent.verticalCenter; label: "c" }
+              PlainText {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Capture"
+                color: root.mutedInk
+                font.family: root.uiFont
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            Row {
+              spacing: Style.space(4)
+              KeyCap { anchors.verticalCenter: parent.verticalCenter; label: "Esc" }
+              PlainText {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "Close"
+                color: root.mutedInk
+                font.family: root.uiFont
+                font.pixelSize: Style.font.caption
+              }
             }
           }
 
           PlainText {
-            visible: root.selectedOcrInstallCode.length > 0
-            width: parent.width
-            text: strings.t("settings.ocrCliHint").arg("omarchy pkg add tesseract-data-" + root.selectedOcrInstallCode)
-            color: Util.alpha(root.fgColor, 0.65)
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            text: "v" + String((root.manifest && root.manifest.version) || "0.9.0")
+            color: Util.alpha(root.fgColor, 0.38)
             font.family: root.uiFont
             font.pixelSize: Style.font.caption
-            wrapMode: Text.Wrap
           }
-        }
-
-        // Footer status line
-        Rectangle {
-          width: parent.width
-          height: 1
-          color: Util.alpha(root.fgColor, 0.14)
-        }
-
-        PlainText {
-          width: parent.width
-          text: root.statusText
-            ? root.statusText
-            : strings.t("settings.footerHint")
-          color: root.statusError ? root.urgentColor : (root.statusText ? root.accentColor : Util.alpha(root.fgColor, 0.58))
-          font.family: root.uiFont
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.Wrap
         }
       }
     }
