@@ -377,6 +377,11 @@ Item {
     root.dismiss()
   }
 
+  function openSettings() {
+    root.dismiss()
+    Util.execArgv(["omarchy-shell", "screenlens-settings", "open"])
+  }
+
   function toggleVoice() {
     if (root.voiceState === "transcribing") return
     if (root.voiceState === "idle") {
@@ -929,6 +934,12 @@ Item {
           color: Util.alpha(root.fgColor, 0.72)
           font.family: root.uiFont
           font.pixelSize: Style.font.caption
+        }
+
+        Ui.Button {
+          iconText: "󰒓"
+          tooltipText: strings.t("settings.openTooltip")
+          onClicked: root.openSettings()
         }
 
         Ui.Button {

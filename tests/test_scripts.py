@@ -206,16 +206,17 @@ class ScreenLensTests(unittest.TestCase):
                 os.unlink(direct["contextPath"])
 
     def test_qml_ui_safety_and_motion_conventions(self):
-        with open(os.path.join(ROOT_DIR, "ScreenLens.qml"), "r", encoding="utf-8") as f:
-            qml = f.read()
-        # No raw Text elements allowed in ScreenLens.qml — must use PlainText wrapper.
-        raw_text_matches = re.findall(r"(?<![A-Za-z0-9_])Text\s*\{", qml)
-        self.assertEqual(raw_text_matches, [], f"Found raw Text blocks: {raw_text_matches}")
-        # Every NumberAnimation duration must go through Style.duration(...)
-        bare_durations = re.findall(r"duration\s*:\s*[0-9]+", qml)
-        self.assertEqual(bare_durations, [], f"Found bare numeric durations: {bare_durations}")
-        # Avoid QML Canvas FBO black-screen regressions across Wayland surface remaps.
-        self.assertIsNone(re.search(r"(?<![A-Za-z0-9_])Canvas\s*\{", qml))
+        for rel in ("ScreenLens.qml", "SettingsPanel.qml"):
+            with open(os.path.join(ROOT_DIR, rel), "r", encoding="utf-8") as f:
+                qml = f.read()
+            # No raw Text elements allowed — must use PlainText wrapper.
+            raw_text_matches = re.findall(r"(?<![A-Za-z0-9_])Text\s*\{", qml)
+            self.assertEqual(raw_text_matches, [], f"{rel}: Found raw Text blocks: {raw_text_matches}")
+            # Every NumberAnimation duration must go through Style.duration(...)
+            bare_durations = re.findall(r"duration\s*:\s*[0-9]+", qml)
+            self.assertEqual(bare_durations, [], f"{rel}: Found bare numeric durations: {bare_durations}")
+            # Avoid QML Canvas FBO black-screen regressions across Wayland surface remaps.
+            self.assertIsNone(re.search(r"(?<![A-Za-z0-9_])Canvas\s*\{", qml), f"{rel}: Found Canvas block")
 
 
 if __name__ == "__main__":

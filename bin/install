@@ -14,6 +14,7 @@ mkdir -p "$STAGE_DIR"
 
 cp "$ROOT_DIR/manifest.json" "$STAGE_DIR/"
 cp "$ROOT_DIR/ScreenLens.qml" "$STAGE_DIR/"
+cp "$ROOT_DIR/SettingsPanel.qml" "$STAGE_DIR/"
 cp "$ROOT_DIR/PlainText.qml" "$STAGE_DIR/"
 cp "$ROOT_DIR/ScreenLensLogic.js" "$STAGE_DIR/"
 cp -R "$ROOT_DIR/scripts" "$STAGE_DIR/"
@@ -35,5 +36,10 @@ for _ in $(seq 1 40); do
   sleep 0.1
 done
 
-omarchy plugin enable "$PLUGIN_ID"
+if [[ -f "$HOME/.config/omarchy/shell.json" ]] && \
+  jq -e --arg id "$PLUGIN_ID" '(.bar.layout // {} | to_entries | map(.value[]) | any(.[]; (.id // .) == $id))' "$HOME/.config/omarchy/shell.json" >/dev/null 2>&1; then
+  omarchy plugin enable "$PLUGIN_ID"
+else
+  omarchy plugin enable "$PLUGIN_ID" --section right
+fi
 echo "Installed and enabled $PLUGIN_ID at $TARGET_DIR"

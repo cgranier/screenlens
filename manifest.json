@@ -2,15 +2,24 @@
   "schemaVersion": 1,
   "id": "carlos.screenlens",
   "name": "ScreenLens",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "carlos",
   "license": "MIT",
-  "description": "Circle-to-Search style on-screen AI overlay with lasso crop, OCR text selection, Superwhisper voice input, and agent handoff.",
+  "description": "Circle-to-Search style on-screen AI overlay with lasso crop, OCR text selection, Superwhisper voice input, agent handoff, and a native Settings panel.",
   "kinds": [
-    "overlay"
+    "overlay",
+    "bar-widget"
   ],
   "keepLoaded": false,
   "entryPoints": {
-    "overlay": "ScreenLens.qml"
+    "overlay": "ScreenLens.qml",
+    "barWidget": "SettingsPanel.qml"
+  },
+  "barWidget": {
+    "displayName": "ScreenLens",
+    "description": "Configure ScreenLens hotkeys, AI providers, task routing, theme, and OCR languages.",
+    "category": "AI",
+    "allowMultiple": false,
+    "defaultSection": "right"
   }
 }
