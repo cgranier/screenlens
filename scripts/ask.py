@@ -363,7 +363,19 @@ def detect_default_agent() -> str:
 
 def build_agent_cli_command(agent: str, full_prompt: str) -> list[str] | None:
     if agent == "claude":
-        return ["claude", "-p", full_prompt]
+        return [
+            "claude",
+            "-p",
+            "--add-dir",
+            "/tmp",
+            "--allowedTools",
+            "Read",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--include-partial-messages",
+            full_prompt,
+        ]
     if agent == "agy":
         return ["agy", "-p", full_prompt]
     if agent == "codex":
@@ -375,6 +387,31 @@ def build_agent_cli_command(agent: str, full_prompt: str) -> list[str] | None:
     if agent == "grok":
         return ["grok", "-p", full_prompt]
     return None
+
+
+def parse_claude_stream_json_line(line: str) -> tuple[str, str]:
+    """Return (delta_text, final_fallback_text) from a Claude Code stream-json line."""
+    raw = line.strip()
+    if not raw or not raw.startswith("{"):
+        return "", ""
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        return "", ""
+    if not isinstance(obj, dict):
+        return "", ""
+    msg_type = obj.get("type")
+    if msg_type == "stream_event":
+        ev = obj.get("event") or {}
+        if ev.get("type") == "content_block_delta":
+            delta = ev.get("delta") or {}
+            if delta.get("type") == "text_delta":
+                return str(delta.get("text") or ""), ""
+    elif msg_type == "result":
+        result_text = obj.get("result")
+        if isinstance(result_text, str) and result_text:
+            return "", result_text
+    return "", ""
 
 
 def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict]) -> None:
@@ -394,7 +431,7 @@ def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict
 
     lines = [SYSTEM_PROMPT]
     if saved_image_path:
-        lines.append(f"Inspect the screenshot image file at: {saved_image_path}")
+        lines.append(f"Use the Read tool to inspect the screenshot image file at: {saved_image_path}")
     for turn in history[-MAX_HISTORY_TURNS:]:
         role = "Assistant" if turn.get("role") == "assistant" else "User"
         text = str(turn.get("text") or "").strip()
@@ -417,16 +454,41 @@ def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict
         return
 
     emit({"type": "meta", "provider": f"agent:{agent}", "model": agent, "croppedPath": saved_image_path})
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
     total = 0
+    final_fallback = ""
     assert proc.stdout is not None
-    for line in proc.stdout:
-        remaining = MAX_RESPONSE_CHARS - total
-        if remaining <= 0:
-            break
-        chunk = line[:remaining]
-        total += len(chunk)
-        emit({"type": "delta", "text": chunk})
+    if agent == "claude":
+        for line in proc.stdout:
+            delta, fallback = parse_claude_stream_json_line(line)
+            if fallback:
+                final_fallback = fallback
+            if not delta:
+                continue
+            remaining = MAX_RESPONSE_CHARS - total
+            if remaining <= 0:
+                break
+            chunk = delta[:remaining]
+            total += len(chunk)
+            emit({"type": "delta", "text": chunk})
+        if total == 0 and final_fallback:
+            chunk = final_fallback[:MAX_RESPONSE_CHARS]
+            total += len(chunk)
+            emit({"type": "delta", "text": chunk})
+    else:
+        for line in proc.stdout:
+            remaining = MAX_RESPONSE_CHARS - total
+            if remaining <= 0:
+                break
+            chunk = line[:remaining]
+            total += len(chunk)
+            emit({"type": "delta", "text": chunk})
     stderr_text = proc.stderr.read().strip() if proc.stderr else ""
     code = proc.wait()
     if code != 0 and total == 0:

@@ -48,34 +48,61 @@ def copy_image(image_path: str, crop_spec: str) -> int:
     return cp.returncode
 
 
+def build_single_line_handoff_prompt(context_path: str, crop_path: str, image_path: str, draft_prompt: str) -> str:
+    """Build a strictly single-line prompt so xdg-terminal-exec never splits args on newlines."""
+    parts = [f"Read the ScreenLens context file at {context_path}"]
+    if crop_path:
+        parts.append(f"and inspect the cropped screenshot at {crop_path}")
+    elif image_path:
+        parts.append(f"and inspect the screenshot at {image_path}")
+    clean_draft = " ".join(str(draft_prompt or "").split())
+    if clean_draft:
+        parts.append(f"— Request: {clean_draft[:500]}")
+    else:
+        parts.append("and continue helping with the captured screen context.")
+    return " ".join(parts).replace("\n", " ").replace("\r", " ")
+
+
 def handoff_to_agent(request_file: str) -> int:
     payload = read_payload(request_file)
 
     prompt = str(payload.get("prompt") or "").strip()
     image_path = str(payload.get("imagePath") or "")
     crop = payload.get("crop")
+    draft_prompt = str(payload.get("draftPrompt") or "")
 
+    crop_path = ""
     # If the user circled a region, save a dedicated cropped PNG and point the agent to it too.
     if image_path and os.path.isfile(image_path) and isinstance(crop, dict) and int(crop.get("w", 0)) > 0 and int(crop.get("h", 0)) > 0:
         x = max(0, int(crop["x"]))
         y = max(0, int(crop["y"]))
         w = max(1, int(crop["w"]))
         h = max(1, int(crop["h"]))
-        crop_path = f"/tmp/omarchy-screenlens-handoff-{os.getuid()}-{int(time.time() * 1000)}.png"
-        fd = os.open(crop_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        candidate = f"/tmp/omarchy-screenlens-handoff-{os.getuid()}-{int(time.time() * 1000)}.png"
+        fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         os.close(fd)
         res = subprocess.run(
-            ["magick", image_path, "-crop", f"{w}x{h}+{x}+{y}", "+repage", crop_path],
+            ["magick", image_path, "-crop", f"{w}x{h}+{x}+{y}", "+repage", candidate],
             capture_output=True,
             timeout=15,
         )
         if res.returncode == 0:
+            crop_path = candidate
             prompt = f"Cropped region image: {crop_path}\n" + prompt
+
+    # Write the full multi-line context to a private file because xdg-terminal-exec
+    # splits command arguments on embedded newlines.
+    context_path = f"/tmp/omarchy-screenlens-context-{os.getuid()}-{int(time.time() * 1000)}.md"
+    fd = os.open(context_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as ctx_file:
+        ctx_file.write(prompt + "\n")
+
+    single_line_prompt = build_single_line_handoff_prompt(context_path, crop_path, image_path, draft_prompt)
 
     agent_prompt_bin = shutil.which("omarchy-agent-prompt") or "/usr/share/omarchy/bin/omarchy-agent-prompt"
     if not os.path.isfile(agent_prompt_bin):
         return 1
-    subprocess.Popen([agent_prompt_bin, prompt], start_new_session=True)
+    subprocess.Popen([agent_prompt_bin, single_line_prompt], start_new_session=True)
     return 0
 
 

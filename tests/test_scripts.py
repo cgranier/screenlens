@@ -22,6 +22,7 @@ capture_mod = load_module("capture", "scripts/capture.py")
 ocr_mod = load_module("ocr", "scripts/ocr.py")
 ask_mod = load_module("ask", "scripts/ask.py")
 voice_mod = load_module("voice", "scripts/voice.py")
+actions_mod = load_module("actions", "scripts/actions.py")
 
 
 class ScreenLensTests(unittest.TestCase):
@@ -129,6 +130,30 @@ class ScreenLensTests(unittest.TestCase):
         sample = {"lastDictation": {"timestamp": "2026-11-25T20:00:00Z", "text": "Explain this chart"}}
         self.assertEqual(voice_mod.extract_text(sample), "Explain this chart")
         self.assertEqual(voice_mod.extract_signature(sample), "timestamp:2026-11-25T20:00:00Z")
+
+    def test_claude_stream_json_and_single_line_handoff(self):
+        delta_line = json.dumps(
+            {
+                "type": "stream_event",
+                "event": {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Chunk"}},
+            }
+        )
+        self.assertEqual(ask_mod.parse_claude_stream_json_line(delta_line), ("Chunk", ""))
+        result_line = json.dumps({"type": "result", "result": "Full answer"})
+        self.assertEqual(ask_mod.parse_claude_stream_json_line(result_line), ("", "Full answer"))
+
+        cmd = ask_mod.build_agent_cli_command("claude", "describe")
+        self.assertIn("--add-dir", cmd)
+        self.assertIn("--allowedTools", cmd)
+        self.assertIn("stream-json", cmd)
+
+        prompt = actions_mod.build_single_line_handoff_prompt(
+            "/tmp/ctx.md", "/tmp/crop.png", "/tmp/full.png", "line1\nline2\r\nline3"
+        )
+        self.assertNotIn("\n", prompt)
+        self.assertNotIn("\r", prompt)
+        self.assertIn("/tmp/ctx.md", prompt)
+        self.assertIn("/tmp/crop.png", prompt)
 
     def test_qml_ui_safety_and_motion_conventions(self):
         with open(os.path.join(ROOT_DIR, "ScreenLens.qml"), "r", encoding="utf-8") as f:

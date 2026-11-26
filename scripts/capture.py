@@ -15,7 +15,7 @@ STALE_SECONDS = 900  # Keep captures for 15 minutes so agent handoffs can read t
 
 def cleanup_stale() -> None:
     now = time.time()
-    for path in glob.glob(f"{TMP_PREFIX}*.png") + glob.glob(f"{TMP_PREFIX}*.json"):
+    for path in glob.glob(f"{TMP_PREFIX}*.png") + glob.glob(f"{TMP_PREFIX}*.json") + glob.glob(f"{TMP_PREFIX}*.md"):
         try:
             if now - os.path.getmtime(path) > STALE_SECONDS:
                 os.unlink(path)

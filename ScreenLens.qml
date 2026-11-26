@@ -153,13 +153,17 @@ Item {
     toastTimer.restart()
   }
 
+  function repaintCanvas() {
+    if (canvasLoader.item) canvasLoader.item.requestPaint()
+  }
+
   function clearSelection() {
     root.lassoPoints = []
     root.selectionRect = null
     root.selectedWordIndices = []
     root.selectedText = ""
     root.selectedTextBounds = null
-    overlayCanvas.requestPaint()
+    root.repaintCanvas()
   }
 
   function remapOcrWords() {
@@ -170,7 +174,7 @@ Item {
       panel.width,
       panel.height
     )
-    overlayCanvas.requestPaint()
+    root.repaintCanvas()
   }
 
   function currentImageCrop() {
@@ -352,7 +356,8 @@ Item {
     root.pendingHandoffJson = JSON.stringify({
       prompt: handoffPrompt,
       imagePath: root.screenshotPath,
-      crop: crop
+      crop: crop,
+      draftPrompt: promptField.text
     })
     handoffProc.running = false
     handoffProc.running = true
@@ -462,7 +467,7 @@ Item {
 
         Qt.callLater(function() {
           promptField.forceActiveFocus()
-          overlayCanvas.requestPaint()
+          root.repaintCanvas()
         })
       }
     }
@@ -590,16 +595,24 @@ Item {
 
     onWidthChanged: if (root.rawOcrWords.length > 0) root.remapOcrWords()
     onHeightChanged: if (root.rawOcrWords.length > 0) root.remapOcrWords()
+    onContentRevealedChanged: if (contentRevealed) root.repaintCanvas()
 
-    // Frozen desktop screenshot backing the entire overlay.
-    Image {
-      id: frozenFrame
+    // Frozen desktop screenshot backing the entire overlay. Recreating the Image
+    // source via a Loader per open guarantees a fresh GPU texture when Wayland
+    // tears down and remaps the layer-shell surface on subsequent summons.
+    Loader {
+      id: frameLoader
       anchors.fill: parent
-      source: root.screenshotPath ? Util.fileUrl(root.screenshotPath) : ""
-      cache: false
-      asynchronous: false
-      fillMode: Image.Stretch
-      smooth: true
+      active: panel.visible && root.screenshotPath.length > 0
+      sourceComponent: Image {
+        anchors.fill: parent
+        source: Util.fileUrl(root.screenshotPath)
+        cache: false
+        asynchronous: false
+        fillMode: Image.Stretch
+        smooth: true
+        onStatusChanged: if (status === Image.Ready) root.repaintCanvas()
+      }
     }
 
     // Subtle edge glow so the user feels the screen freeze immediately.
@@ -614,85 +627,95 @@ Item {
       }
     }
 
-    // Interactive drawing & OCR highlight layer.
-    Canvas {
-      id: overlayCanvas
+    // Interactive drawing & OCR highlight layer. Mounted freshly per open with
+    // Canvas.Image renderTarget so Wayland surface hide/show cycles never leave
+    // an uninitialized black FBO covering the frozen screenshot.
+    Loader {
+      id: canvasLoader
       anchors.fill: parent
+      active: panel.visible
+      onLoaded: root.repaintCanvas()
+      sourceComponent: Canvas {
+        id: overlayCanvas
+        anchors.fill: parent
+        renderTarget: Canvas.Image
+        renderStrategy: Canvas.Immediate
 
-      onPaint: {
-        var ctx = getContext("2d")
-        ctx.clearRect(0, 0, width, height)
+        onPaint: {
+          var ctx = getContext("2d")
+          ctx.clearRect(0, 0, width, height)
 
-        // Dim slightly across the screen; when a region is selected, punch a bright cutout.
-        if (root.selectionRect) {
-          ctx.fillStyle = "rgba(0, 0, 0, 0.44)"
-          ctx.fillRect(0, 0, width, height)
-          var r = root.selectionRect
-          ctx.clearRect(r.x, r.y, r.w, r.h)
+          // Dim slightly across the screen; when a region is selected, punch a bright cutout.
+          if (root.selectionRect) {
+            ctx.fillStyle = "rgba(0, 0, 0, 0.44)"
+            ctx.fillRect(0, 0, width, height)
+            var r = root.selectionRect
+            ctx.clearRect(r.x, r.y, r.w, r.h)
 
-          // Crisp accent border + glowing outer stroke around selected region.
-          ctx.save()
-          ctx.strokeStyle = root.accentColor
-          ctx.lineWidth = 2.5
-          ctx.strokeRect(r.x + 1, r.y + 1, Math.max(1, r.w - 2), Math.max(1, r.h - 2))
+            // Crisp accent border + glowing outer stroke around selected region.
+            ctx.save()
+            ctx.strokeStyle = root.accentColor
+            ctx.lineWidth = 2.5
+            ctx.strokeRect(r.x + 1, r.y + 1, Math.max(1, r.w - 2), Math.max(1, r.h - 2))
 
-          // Corner ticks
-          var tick = Math.min(14, r.w / 3, r.h / 3)
-          ctx.lineWidth = 4
-          ctx.beginPath()
-          // Top-left
-          ctx.moveTo(r.x, r.y + tick); ctx.lineTo(r.x, r.y); ctx.lineTo(r.x + tick, r.y)
-          // Top-right
-          ctx.moveTo(r.x + r.w - tick, r.y); ctx.lineTo(r.x + r.w, r.y); ctx.lineTo(r.x + r.w, r.y + tick)
-          // Bottom-left
-          ctx.moveTo(r.x, r.y + r.h - tick); ctx.lineTo(r.x, r.y + r.h); ctx.lineTo(r.x + tick, r.y + r.h)
-          // Bottom-right
-          ctx.moveTo(r.x + r.w - tick, r.y + r.h); ctx.lineTo(r.x + r.w, r.y + r.h); ctx.lineTo(r.x + r.w, r.y + r.h - tick)
-          ctx.stroke()
-          ctx.restore()
-        } else {
-          ctx.fillStyle = "rgba(0, 0, 0, 0.16)"
-          ctx.fillRect(0, 0, width, height)
-        }
-
-        // Draw OCR word boxes in Text Selection mode.
-        if (root.mode === "text" && root.ocrWords.length > 0) {
-          var selectedSet = Object.create(null)
-          for (var si = 0; si < root.selectedWordIndices.length; si++) {
-            selectedSet[root.selectedWordIndices[si]] = true
+            // Corner ticks
+            var tick = Math.min(14, r.w / 3, r.h / 3)
+            ctx.lineWidth = 4
+            ctx.beginPath()
+            // Top-left
+            ctx.moveTo(r.x, r.y + tick); ctx.lineTo(r.x, r.y); ctx.lineTo(r.x + tick, r.y)
+            // Top-right
+            ctx.moveTo(r.x + r.w - tick, r.y); ctx.lineTo(r.x + r.w, r.y); ctx.lineTo(r.x + r.w, r.y + tick)
+            // Bottom-left
+            ctx.moveTo(r.x, r.y + r.h - tick); ctx.lineTo(r.x, r.y + r.h); ctx.lineTo(r.x + tick, r.y + r.h)
+            // Bottom-right
+            ctx.moveTo(r.x + r.w - tick, r.y + r.h); ctx.lineTo(r.x + r.w, r.y + r.h); ctx.lineTo(r.x + r.w, r.y + r.h - tick)
+            ctx.stroke()
+            ctx.restore()
+          } else {
+            ctx.fillStyle = "rgba(0, 0, 0, 0.16)"
+            ctx.fillRect(0, 0, width, height)
           }
-          for (var wi = 0; wi < root.ocrWords.length; wi++) {
-            var w = root.ocrWords[wi]
-            if (selectedSet[wi]) {
-              ctx.fillStyle = Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, 0.42)
-              ctx.fillRect(w.x - 2, w.y - 1, w.w + 4, w.h + 2)
-              ctx.strokeStyle = root.accentColor
-              ctx.lineWidth = 1.2
-              ctx.strokeRect(w.x - 2, w.y - 1, w.w + 4, w.h + 2)
-            } else {
-              ctx.fillStyle = "rgba(255, 255, 255, 0.12)"
-              ctx.fillRect(w.x - 1, w.y - 1, w.w + 2, w.h + 2)
+
+          // Draw OCR word boxes in Text Selection mode.
+          if (root.mode === "text" && root.ocrWords.length > 0) {
+            var selectedSet = Object.create(null)
+            for (var si = 0; si < root.selectedWordIndices.length; si++) {
+              selectedSet[root.selectedWordIndices[si]] = true
+            }
+            for (var wi = 0; wi < root.ocrWords.length; wi++) {
+              var w = root.ocrWords[wi]
+              if (selectedSet[wi]) {
+                ctx.fillStyle = Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, 0.42)
+                ctx.fillRect(w.x - 2, w.y - 1, w.w + 4, w.h + 2)
+                ctx.strokeStyle = root.accentColor
+                ctx.lineWidth = 1.2
+                ctx.strokeRect(w.x - 2, w.y - 1, w.w + 4, w.h + 2)
+              } else {
+                ctx.fillStyle = "rgba(255, 255, 255, 0.12)"
+                ctx.fillRect(w.x - 1, w.y - 1, w.w + 2, w.h + 2)
+              }
             }
           }
-        }
 
-        // Draw active freehand lasso stroke while dragging.
-        if (root.draggingCanvas && root.mode === "lasso" && root.lassoPoints.length > 1) {
-          ctx.save()
-          ctx.beginPath()
-          ctx.moveTo(root.lassoPoints[0].x, root.lassoPoints[0].y)
-          for (var i = 1; i < root.lassoPoints.length; i++) {
-            ctx.lineTo(root.lassoPoints[i].x, root.lassoPoints[i].y)
+          // Draw active freehand lasso stroke while dragging.
+          if (root.draggingCanvas && root.mode === "lasso" && root.lassoPoints.length > 1) {
+            ctx.save()
+            ctx.beginPath()
+            ctx.moveTo(root.lassoPoints[0].x, root.lassoPoints[0].y)
+            for (var i = 1; i < root.lassoPoints.length; i++) {
+              ctx.lineTo(root.lassoPoints[i].x, root.lassoPoints[i].y)
+            }
+            ctx.lineCap = "round"
+            ctx.lineJoin = "round"
+            ctx.strokeStyle = Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, 0.35)
+            ctx.lineWidth = 10
+            ctx.stroke()
+            ctx.strokeStyle = root.accentColor
+            ctx.lineWidth = 3
+            ctx.stroke()
+            ctx.restore()
           }
-          ctx.lineCap = "round"
-          ctx.lineJoin = "round"
-          ctx.strokeStyle = Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, 0.35)
-          ctx.lineWidth = 10
-          ctx.stroke()
-          ctx.strokeStyle = root.accentColor
-          ctx.lineWidth = 3
-          ctx.stroke()
-          ctx.restore()
         }
       }
     }
@@ -729,7 +752,7 @@ Item {
           root.selectionRect = null
           root.lassoPoints = [{ x: mouse.x, y: mouse.y }]
         }
-        overlayCanvas.requestPaint()
+        root.repaintCanvas()
       }
 
       onPositionChanged: function(mouse) {
@@ -757,7 +780,7 @@ Item {
             root.lassoPoints = pts
           }
         }
-        overlayCanvas.requestPaint()
+        root.repaintCanvas()
       }
 
       onReleased: function(mouse) {
@@ -768,7 +791,7 @@ Item {
           pts.push({ x: mouse.x, y: mouse.y })
           root.selectionRect = Logic.computeSelectionRect(pts, panel.width, panel.height, 8)
           root.lassoPoints = []
-          overlayCanvas.requestPaint()
+          root.repaintCanvas()
         }
         promptField.forceActiveFocus()
       }
@@ -867,7 +890,7 @@ Item {
           selected: root.mode === "lasso"
           onClicked: {
             root.mode = "lasso"
-            overlayCanvas.requestPaint()
+            root.repaintCanvas()
             promptField.forceActiveFocus()
           }
         }
@@ -879,7 +902,7 @@ Item {
           selected: root.mode === "text"
           onClicked: {
             root.mode = "text"
-            overlayCanvas.requestPaint()
+            root.repaintCanvas()
             promptField.forceActiveFocus()
           }
         }
@@ -1272,7 +1295,7 @@ Item {
                   event.accepted = true
                 } else if (event.key === Qt.Key_Tab) {
                   root.mode = (root.mode === "lasso") ? "text" : "lasso"
-                  overlayCanvas.requestPaint()
+                  root.repaintCanvas()
                   event.accepted = true
                 } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_M) {
                   root.toggleVoice()
