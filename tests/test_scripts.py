@@ -155,6 +155,19 @@ class ScreenLensTests(unittest.TestCase):
         self.assertIn("/tmp/ctx.md", prompt)
         self.assertIn("/tmp/crop.png", prompt)
 
+        with tempfile.TemporaryDirectory() as tmp:
+            req_path = os.path.join(tmp, "req.json")
+            with open(req_path, "w", encoding="utf-8") as f:
+                json.dump({"prompt": "Context\nLine 2", "imagePath": "", "crop": None, "draftPrompt": "Help"}, f)
+            prepared = actions_mod.prepare_handoff(req_path)
+            try:
+                self.assertTrue(prepared["ok"])
+                self.assertTrue(os.path.isfile(prepared["contextPath"]))
+                self.assertNotIn("\n", prepared["prompt"])
+            finally:
+                if os.path.exists(prepared["contextPath"]):
+                    os.unlink(prepared["contextPath"])
+
     def test_qml_ui_safety_and_motion_conventions(self):
         with open(os.path.join(ROOT_DIR, "ScreenLens.qml"), "r", encoding="utf-8") as f:
             qml = f.read()
@@ -164,6 +177,8 @@ class ScreenLensTests(unittest.TestCase):
         # Every NumberAnimation duration must go through Style.duration(...)
         bare_durations = re.findall(r"duration\s*:\s*[0-9]+", qml)
         self.assertEqual(bare_durations, [], f"Found bare numeric durations: {bare_durations}")
+        # Avoid QML Canvas FBO black-screen regressions across Wayland surface remaps.
+        self.assertIsNone(re.search(r"(?<![A-Za-z0-9_])Canvas\s*\{", qml))
 
 
 if __name__ == "__main__":

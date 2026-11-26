@@ -63,7 +63,7 @@ def build_single_line_handoff_prompt(context_path: str, crop_path: str, image_pa
     return " ".join(parts).replace("\n", " ").replace("\r", " ")
 
 
-def handoff_to_agent(request_file: str) -> int:
+def prepare_handoff(request_file: str) -> dict:
     payload = read_payload(request_file)
 
     prompt = str(payload.get("prompt") or "").strip()
@@ -98,11 +98,27 @@ def handoff_to_agent(request_file: str) -> int:
         ctx_file.write(prompt + "\n")
 
     single_line_prompt = build_single_line_handoff_prompt(context_path, crop_path, image_path, draft_prompt)
+    return {
+        "ok": True,
+        "prompt": single_line_prompt,
+        "contextPath": context_path,
+        "cropPath": crop_path,
+    }
 
+
+def handoff_to_agent(request_file: str) -> int:
+    prepared = prepare_handoff(request_file)
     agent_prompt_bin = shutil.which("omarchy-agent-prompt") or "/usr/share/omarchy/bin/omarchy-agent-prompt"
     if not os.path.isfile(agent_prompt_bin):
         return 1
-    subprocess.Popen([agent_prompt_bin, single_line_prompt], start_new_session=True)
+    subprocess.Popen(
+        [agent_prompt_bin, prepared["prompt"]],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+    )
     return 0
 
 
@@ -117,6 +133,9 @@ def main() -> int:
     p_img.add_argument("image")
     p_img.add_argument("--crop", default="")
 
+    p_prep = sub.add_parser("prepare-handoff")
+    p_prep.add_argument("file")
+
     p_handoff = sub.add_parser("handoff")
     p_handoff.add_argument("file")
 
@@ -125,6 +144,9 @@ def main() -> int:
         return copy_text_from_file(args.file)
     if args.cmd == "copy-image":
         return copy_image(args.image, args.crop)
+    if args.cmd == "prepare-handoff":
+        print(json.dumps(prepare_handoff(args.file)), flush=True)
+        return 0
     if args.cmd == "handoff":
         return handoff_to_agent(args.file)
     return 1

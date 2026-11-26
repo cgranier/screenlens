@@ -3,6 +3,7 @@ import Quickshell.Io
 import Quickshell.Wayland
 import QtQuick
 import QtQuick.Controls as QQC
+import QtQuick.Shapes
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui as Ui
@@ -29,6 +30,7 @@ Item {
   // Interaction mode: "lasso" (freehand circle / box) or "text" (OCR word selection)
   property string mode: "lasso"
   property var lassoPoints: []
+  property var lassoPathPoints: [] // Array of Qt.point() for PathPolyline
   property bool draggingCanvas: false
   property var selectionRect: null // {x, y, w, h} in logical overlay coordinates
 
@@ -39,6 +41,7 @@ Item {
   property int textDragStartIdx: -1
   property var textDragStartPoint: null
   property var selectedWordIndices: []
+  property var selectedWordMap: ({})
   property string selectedText: ""
   property var selectedTextBounds: null
 
@@ -116,6 +119,7 @@ Item {
     root.windowTitle = ""
     root.mode = "lasso"
     root.lassoPoints = []
+    root.lassoPathPoints = []
     root.draggingCanvas = false
     root.selectionRect = null
     root.ocrLoading = false
@@ -124,6 +128,7 @@ Item {
     root.textDragStartIdx = -1
     root.textDragStartPoint = null
     root.selectedWordIndices = []
+    root.selectedWordMap = ({})
     root.selectedText = ""
     root.selectedTextBounds = null
     root.messages = []
@@ -153,17 +158,22 @@ Item {
     toastTimer.restart()
   }
 
-  function repaintCanvas() {
-    if (canvasLoader.item) canvasLoader.item.requestPaint()
+  function setSelectedWords(indices, text, bounds) {
+    var map = ({})
+    if (Array.isArray(indices)) {
+      for (var i = 0; i < indices.length; i++) map[indices[i]] = true
+    }
+    root.selectedWordIndices = indices || []
+    root.selectedWordMap = map
+    root.selectedText = text || ""
+    root.selectedTextBounds = bounds || null
   }
 
   function clearSelection() {
     root.lassoPoints = []
+    root.lassoPathPoints = []
     root.selectionRect = null
-    root.selectedWordIndices = []
-    root.selectedText = ""
-    root.selectedTextBounds = null
-    root.repaintCanvas()
+    root.setSelectedWords([], "", null)
   }
 
   function remapOcrWords() {
@@ -174,7 +184,6 @@ Item {
       panel.width,
       panel.height
     )
-    root.repaintCanvas()
   }
 
   function currentImageCrop() {
@@ -361,7 +370,6 @@ Item {
     })
     handoffProc.running = false
     handoffProc.running = true
-    root.dismiss()
   }
 
   function toggleVoice() {
@@ -467,7 +475,6 @@ Item {
 
         Qt.callLater(function() {
           promptField.forceActiveFocus()
-          root.repaintCanvas()
         })
       }
     }
@@ -539,8 +546,21 @@ Item {
   Process {
     id: handoffProc
     stdinEnabled: true
-    command: ["/usr/bin/python3", root.pluginDir + "/scripts/actions.py", "handoff", "-"]
+    command: ["/usr/bin/python3", root.pluginDir + "/scripts/actions.py", "prepare-handoff", "-"]
     onStarted: handoffProc.write(root.pendingHandoffJson + "\n")
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var res = null
+        try { res = JSON.parse(text) } catch (e) { res = null }
+        root.dismiss()
+        if (res && res.ok && res.prompt) {
+          // Match Omarchy's first-party agents panel: detach via login shell so
+          // uwsm-app / xdg-terminal-exec / foot inherit the full desktop session.
+          Util.execArgv(["omarchy-agent-prompt", res.prompt])
+        }
+      }
+    }
   }
 
   Process {
@@ -595,27 +615,53 @@ Item {
 
     onWidthChanged: if (root.rawOcrWords.length > 0) root.remapOcrWords()
     onHeightChanged: if (root.rawOcrWords.length > 0) root.remapOcrWords()
-    onContentRevealedChanged: if (contentRevealed) root.repaintCanvas()
 
-    // Frozen desktop screenshot backing the entire overlay. Recreating the Image
-    // source via a Loader per open guarantees a fresh GPU texture when Wayland
-    // tears down and remaps the layer-shell surface on subsequent summons.
-    Loader {
-      id: frameLoader
+    // Pure Qt Quick translucent scrims over the transparent OverlayWindow — no
+    // fullscreen Image or Canvas FBO that can render black across Wayland
+    // layer-shell unmap/remap cycles.
+    Rectangle {
       anchors.fill: parent
-      active: panel.visible && root.screenshotPath.length > 0
-      sourceComponent: Image {
-        anchors.fill: parent
-        source: Util.fileUrl(root.screenshotPath)
-        cache: false
-        asynchronous: false
-        fillMode: Image.Stretch
-        smooth: true
-        onStatusChanged: if (status === Image.Ready) root.repaintCanvas()
+      visible: !root.selectionRect
+      color: Qt.rgba(0, 0, 0, 0.16)
+    }
+
+    // Four dim strips framing the selected region so the cutout stays crystal-clear.
+    Item {
+      anchors.fill: parent
+      visible: !!root.selectionRect
+      readonly property real rx: root.selectionRect ? root.selectionRect.x : 0
+      readonly property real ry: root.selectionRect ? root.selectionRect.y : 0
+      readonly property real rw: root.selectionRect ? root.selectionRect.w : 0
+      readonly property real rh: root.selectionRect ? root.selectionRect.h : 0
+
+      Rectangle { x: 0; y: 0; width: parent.width; height: Math.max(0, parent.ry); color: Qt.rgba(0, 0, 0, 0.44) }
+      Rectangle { x: 0; y: parent.ry + parent.rh; width: parent.width; height: Math.max(0, parent.height - (parent.ry + parent.rh)); color: Qt.rgba(0, 0, 0, 0.44) }
+      Rectangle { x: 0; y: parent.ry; width: Math.max(0, parent.rx); height: parent.rh; color: Qt.rgba(0, 0, 0, 0.44) }
+      Rectangle { x: parent.rx + parent.rw; y: parent.ry; width: Math.max(0, parent.width - (parent.rx + parent.rw)); height: parent.rh; color: Qt.rgba(0, 0, 0, 0.44) }
+
+      // Accent frame + corner ticks around selected region.
+      Rectangle {
+        x: parent.rx
+        y: parent.ry
+        width: parent.rw
+        height: parent.rh
+        color: "transparent"
+        border.width: 2
+        border.color: root.accentColor
+
+        readonly property real tick: Math.min(14, width / 3, height / 3)
+        Rectangle { x: 0; y: 0; width: parent.tick; height: 4; color: root.accentColor }
+        Rectangle { x: 0; y: 0; width: 4; height: parent.tick; color: root.accentColor }
+        Rectangle { x: parent.width - parent.tick; y: 0; width: parent.tick; height: 4; color: root.accentColor }
+        Rectangle { x: parent.width - 4; y: 0; width: 4; height: parent.tick; color: root.accentColor }
+        Rectangle { x: 0; y: parent.height - 4; width: parent.tick; height: 4; color: root.accentColor }
+        Rectangle { x: 0; y: parent.height - parent.tick; width: 4; height: parent.tick; color: root.accentColor }
+        Rectangle { x: parent.width - parent.tick; y: parent.height - 4; width: parent.tick; height: 4; color: root.accentColor }
+        Rectangle { x: parent.width - 4; y: parent.height - parent.tick; width: 4; height: parent.tick; color: root.accentColor }
       }
     }
 
-    // Subtle edge glow so the user feels the screen freeze immediately.
+    // Subtle edge glow so the user feels ScreenLens activate immediately.
     Rectangle {
       anchors.fill: parent
       color: "transparent"
@@ -627,96 +673,51 @@ Item {
       }
     }
 
-    // Interactive drawing & OCR highlight layer. Mounted freshly per open with
-    // Canvas.Image renderTarget so Wayland surface hide/show cycles never leave
-    // an uninitialized black FBO covering the frozen screenshot.
-    Loader {
-      id: canvasLoader
+    // Native Qt Quick OCR word highlight boxes (visible only in Select Text mode).
+    Item {
       anchors.fill: parent
-      active: panel.visible
-      onLoaded: root.repaintCanvas()
-      sourceComponent: Canvas {
-        id: overlayCanvas
-        anchors.fill: parent
-        renderTarget: Canvas.Image
-        renderStrategy: Canvas.Immediate
+      visible: root.mode === "text" && root.ocrWords.length > 0
 
-        onPaint: {
-          var ctx = getContext("2d")
-          ctx.clearRect(0, 0, width, height)
-
-          // Dim slightly across the screen; when a region is selected, punch a bright cutout.
-          if (root.selectionRect) {
-            ctx.fillStyle = "rgba(0, 0, 0, 0.44)"
-            ctx.fillRect(0, 0, width, height)
-            var r = root.selectionRect
-            ctx.clearRect(r.x, r.y, r.w, r.h)
-
-            // Crisp accent border + glowing outer stroke around selected region.
-            ctx.save()
-            ctx.strokeStyle = root.accentColor
-            ctx.lineWidth = 2.5
-            ctx.strokeRect(r.x + 1, r.y + 1, Math.max(1, r.w - 2), Math.max(1, r.h - 2))
-
-            // Corner ticks
-            var tick = Math.min(14, r.w / 3, r.h / 3)
-            ctx.lineWidth = 4
-            ctx.beginPath()
-            // Top-left
-            ctx.moveTo(r.x, r.y + tick); ctx.lineTo(r.x, r.y); ctx.lineTo(r.x + tick, r.y)
-            // Top-right
-            ctx.moveTo(r.x + r.w - tick, r.y); ctx.lineTo(r.x + r.w, r.y); ctx.lineTo(r.x + r.w, r.y + tick)
-            // Bottom-left
-            ctx.moveTo(r.x, r.y + r.h - tick); ctx.lineTo(r.x, r.y + r.h); ctx.lineTo(r.x + tick, r.y + r.h)
-            // Bottom-right
-            ctx.moveTo(r.x + r.w - tick, r.y + r.h); ctx.lineTo(r.x + r.w, r.y + r.h); ctx.lineTo(r.x + r.w, r.y + r.h - tick)
-            ctx.stroke()
-            ctx.restore()
-          } else {
-            ctx.fillStyle = "rgba(0, 0, 0, 0.16)"
-            ctx.fillRect(0, 0, width, height)
-          }
-
-          // Draw OCR word boxes in Text Selection mode.
-          if (root.mode === "text" && root.ocrWords.length > 0) {
-            var selectedSet = Object.create(null)
-            for (var si = 0; si < root.selectedWordIndices.length; si++) {
-              selectedSet[root.selectedWordIndices[si]] = true
-            }
-            for (var wi = 0; wi < root.ocrWords.length; wi++) {
-              var w = root.ocrWords[wi]
-              if (selectedSet[wi]) {
-                ctx.fillStyle = Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, 0.42)
-                ctx.fillRect(w.x - 2, w.y - 1, w.w + 4, w.h + 2)
-                ctx.strokeStyle = root.accentColor
-                ctx.lineWidth = 1.2
-                ctx.strokeRect(w.x - 2, w.y - 1, w.w + 4, w.h + 2)
-              } else {
-                ctx.fillStyle = "rgba(255, 255, 255, 0.12)"
-                ctx.fillRect(w.x - 1, w.y - 1, w.w + 2, w.h + 2)
-              }
-            }
-          }
-
-          // Draw active freehand lasso stroke while dragging.
-          if (root.draggingCanvas && root.mode === "lasso" && root.lassoPoints.length > 1) {
-            ctx.save()
-            ctx.beginPath()
-            ctx.moveTo(root.lassoPoints[0].x, root.lassoPoints[0].y)
-            for (var i = 1; i < root.lassoPoints.length; i++) {
-              ctx.lineTo(root.lassoPoints[i].x, root.lassoPoints[i].y)
-            }
-            ctx.lineCap = "round"
-            ctx.lineJoin = "round"
-            ctx.strokeStyle = Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, 0.35)
-            ctx.lineWidth = 10
-            ctx.stroke()
-            ctx.strokeStyle = root.accentColor
-            ctx.lineWidth = 3
-            ctx.stroke()
-            ctx.restore()
-          }
+      Repeater {
+        model: root.mode === "text" ? root.ocrWords : []
+        delegate: Rectangle {
+          readonly property bool isSelected: root.selectedWordMap[index] === true
+          x: modelData.x - 1
+          y: modelData.y - 1
+          width: modelData.w + 2
+          height: modelData.h + 2
+          radius: 2
+          color: isSelected
+            ? Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, 0.42)
+            : Qt.rgba(1, 1, 1, 0.14)
+          border.width: isSelected ? 1 : 0
+          border.color: root.accentColor
         }
+      }
+    }
+
+    // Native GPU-rendered freehand lasso stroke while dragging.
+    Shape {
+      anchors.fill: parent
+      visible: root.draggingCanvas && root.mode === "lasso" && root.lassoPathPoints.length > 1
+      antialiasing: true
+
+      ShapePath {
+        fillColor: "transparent"
+        strokeColor: Qt.rgba(root.accentColor.r, root.accentColor.g, root.accentColor.b, 0.35)
+        strokeWidth: 10
+        capStyle: ShapePath.RoundCap
+        joinStyle: ShapePath.RoundJoin
+        PathPolyline { path: root.lassoPathPoints }
+      }
+
+      ShapePath {
+        fillColor: "transparent"
+        strokeColor: root.accentColor
+        strokeWidth: 3
+        capStyle: ShapePath.RoundCap
+        joinStyle: ShapePath.RoundJoin
+        PathPolyline { path: root.lassoPathPoints }
       }
     }
 
@@ -737,22 +738,16 @@ Item {
           root.textDragStartIdx = Logic.hitTestWord(root.ocrWords, mouse.x, mouse.y, 28)
           if (root.textDragStartIdx >= 0) {
             var single = Logic.selectWordsBetween(root.ocrWords, root.textDragStartIdx, root.textDragStartIdx, null)
-            root.selectedWordIndices = single.indices
-            root.selectedText = single.text
-            root.selectedTextBounds = single.bounds
+            root.setSelectedWords(single.indices, single.text, single.bounds)
           } else {
-            root.selectedWordIndices = []
-            root.selectedText = ""
-            root.selectedTextBounds = null
+            root.setSelectedWords([], "", null)
           }
         } else {
-          root.selectedWordIndices = []
-          root.selectedText = ""
-          root.selectedTextBounds = null
+          root.setSelectedWords([], "", null)
           root.selectionRect = null
           root.lassoPoints = [{ x: mouse.x, y: mouse.y }]
+          root.lassoPathPoints = [Qt.point(mouse.x, mouse.y)]
         }
-        root.repaintCanvas()
       }
 
       onPositionChanged: function(mouse) {
@@ -769,18 +764,18 @@ Item {
             }
           }
           var sel = Logic.selectWordsBetween(root.ocrWords, root.textDragStartIdx, endIdx, dragRect)
-          root.selectedWordIndices = sel.indices
-          root.selectedText = sel.text
-          root.selectedTextBounds = sel.bounds
+          root.setSelectedWords(sel.indices, sel.text, sel.bounds)
         } else {
           var pts = root.lassoPoints
           var last = pts.length > 0 ? pts[pts.length - 1] : null
           if (!last || Math.hypot(mouse.x - last.x, mouse.y - last.y) >= 4) {
             pts.push({ x: mouse.x, y: mouse.y })
             root.lassoPoints = pts
+            var pathPts = root.lassoPathPoints.slice()
+            pathPts.push(Qt.point(mouse.x, mouse.y))
+            root.lassoPathPoints = pathPts
           }
         }
-        root.repaintCanvas()
       }
 
       onReleased: function(mouse) {
@@ -791,7 +786,7 @@ Item {
           pts.push({ x: mouse.x, y: mouse.y })
           root.selectionRect = Logic.computeSelectionRect(pts, panel.width, panel.height, 8)
           root.lassoPoints = []
-          root.repaintCanvas()
+          root.lassoPathPoints = []
         }
         promptField.forceActiveFocus()
       }
@@ -890,7 +885,6 @@ Item {
           selected: root.mode === "lasso"
           onClicked: {
             root.mode = "lasso"
-            root.repaintCanvas()
             promptField.forceActiveFocus()
           }
         }
@@ -902,7 +896,6 @@ Item {
           selected: root.mode === "text"
           onClicked: {
             root.mode = "text"
-            root.repaintCanvas()
             promptField.forceActiveFocus()
           }
         }
@@ -1295,7 +1288,6 @@ Item {
                   event.accepted = true
                 } else if (event.key === Qt.Key_Tab) {
                   root.mode = (root.mode === "lasso") ? "text" : "lasso"
-                  root.repaintCanvas()
                   event.accepted = true
                 } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_M) {
                   root.toggleVoice()

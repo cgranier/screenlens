@@ -88,7 +88,7 @@ def main() -> int:
         raw_w, raw_h = raw_h, raw_w
 
     image_path = make_private_path(".png")
-    grim_cmd = ["grim"]
+    grim_cmd = ["grim", "-l", "1"]
     if mon_name:
         grim_cmd.extend(["-o", mon_name])
     grim_cmd.append(image_path)
