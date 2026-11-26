@@ -90,7 +90,17 @@ def main() -> int:
         print(json.dumps({"ok": False, "error": "image file not found"}), flush=True)
         return 1
 
-    langs = os.environ.get("OMARCHY_OCR_LANGS", "eng") or "eng"
+    langs = os.environ.get("OMARCHY_OCR_LANGS", "")
+    if not langs:
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            from config import load_config as load_sl_config
+
+            cfg_langs = load_sl_config().get("ocrLanguages") or ["eng"]
+            langs = "+".join(cfg_langs)
+        except Exception:
+            langs = "eng"
+    langs = langs or "eng"
 
     try:
         input_bytes = None

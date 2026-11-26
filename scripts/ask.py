@@ -18,7 +18,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-CONFIG_PATH = os.path.expanduser("~/.config/omarchy/screenlens.json")
+_SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
+
+from config import CONFIG_PATH, DEFAULT_CONFIG, load_config as load_v2_config
+
 MAX_RESPONSE_CHARS = 65536
 MAX_HISTORY_TURNS = 10
 SOCKET_TIMEOUT = 45
@@ -42,12 +47,7 @@ def emit(event: dict) -> None:
 
 
 def load_config(path: str = CONFIG_PATH) -> dict:
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
+    return load_v2_config(path)
 
 
 def validate_ollama_host(host: str) -> str:
@@ -59,39 +59,59 @@ def validate_ollama_host(host: str) -> str:
     return host.rstrip("/")
 
 
-def resolve_provider(config: dict, env: dict | None = None) -> dict:
+def resolve_provider(config: dict, env: dict | None = None, task: str = "") -> dict:
     env_map = os.environ if env is None else env
-    preferred = str(config.get("provider") or "auto").strip().lower()
-    explicit_model = str(config.get("model") or "").strip()
-    explicit_key = str(config.get("apiKey") or "").strip()
+    from config import normalize_config
 
-    gemini_key = str(config.get("geminiApiKey") or env_map.get("GEMINI_API_KEY") or env_map.get("GOOGLE_API_KEY") or "").strip()
-    anthropic_key = str(config.get("anthropicApiKey") or env_map.get("ANTHROPIC_API_KEY") or "").strip()
-    openai_key = str(config.get("openaiApiKey") or env_map.get("OPENAI_API_KEY") or "").strip()
-    ollama_host = str(config.get("ollamaHost") or env_map.get("OLLAMA_HOST") or "").strip()
+    cfg = normalize_config(config)
+    providers = cfg.get("providers") or {}
+    preferred = str(cfg.get("defaultProvider") or "auto").strip().lower()
+    explicit_model = ""
+
+    # Honor optional per-task routing overrides when enabled (Issue #4).
+    routing = cfg.get("taskRouting") or {}
+    if task and routing.get("enabled") and isinstance(routing.get(task), dict):
+        task_prov = str(routing[task].get("provider") or "").strip().lower()
+        task_model = str(routing[task].get("model") or "").strip()
+        if task_prov:
+            preferred = task_prov
+        if task_model:
+            explicit_model = task_model
+
+    gemini_cfg = providers.get("gemini") or {}
+    anthropic_cfg = providers.get("anthropic") or {}
+    openai_cfg = providers.get("openai") or {}
+    ollama_cfg = providers.get("ollama") or {}
+    agent_cfg = providers.get("agent") or {}
+
+    gemini_key = str(gemini_cfg.get("apiKey") or env_map.get("GEMINI_API_KEY") or env_map.get("GOOGLE_API_KEY") or "").strip()
+    anthropic_key = str(anthropic_cfg.get("apiKey") or env_map.get("ANTHROPIC_API_KEY") or "").strip()
+    openai_key = str(openai_cfg.get("apiKey") or env_map.get("OPENAI_API_KEY") or "").strip()
+    ollama_host = str(env_map.get("OLLAMA_HOST") or "").strip()
+    configured_ollama_host = str(ollama_cfg.get("host") or "http://127.0.0.1:11434").strip()
 
     if preferred == "gemini":
-        return {"provider": "gemini", "model": explicit_model or DEFAULT_MODELS["gemini"], "apiKey": explicit_key or gemini_key}
+        return {"provider": "gemini", "model": explicit_model or str(gemini_cfg.get("model") or DEFAULT_MODELS["gemini"]), "apiKey": gemini_key}
     if preferred == "anthropic":
-        return {"provider": "anthropic", "model": explicit_model or DEFAULT_MODELS["anthropic"], "apiKey": explicit_key or anthropic_key}
+        return {"provider": "anthropic", "model": explicit_model or str(anthropic_cfg.get("model") or DEFAULT_MODELS["anthropic"]), "apiKey": anthropic_key}
     if preferred == "openai":
-        return {"provider": "openai", "model": explicit_model or DEFAULT_MODELS["openai"], "apiKey": explicit_key or openai_key}
+        return {"provider": "openai", "model": explicit_model or str(openai_cfg.get("model") or DEFAULT_MODELS["openai"]), "apiKey": openai_key}
     if preferred == "ollama":
-        host = validate_ollama_host(ollama_host or "http://127.0.0.1:11434")
-        return {"provider": "ollama", "model": explicit_model or str(config.get("ollamaModel") or DEFAULT_MODELS["ollama"]), "host": host}
+        host = validate_ollama_host(ollama_host or configured_ollama_host)
+        return {"provider": "ollama", "model": explicit_model or str(ollama_cfg.get("model") or DEFAULT_MODELS["ollama"]), "host": host}
     if preferred == "agent":
-        return {"provider": "agent", "model": explicit_model}
+        return {"provider": "agent", "model": explicit_model or str(agent_cfg.get("model") or "")}
 
     # Auto-detection order: fastest direct Vision APIs first, then Ollama, then Omarchy default agent.
     if gemini_key:
-        return {"provider": "gemini", "model": explicit_model or DEFAULT_MODELS["gemini"], "apiKey": gemini_key}
+        return {"provider": "gemini", "model": explicit_model or str(gemini_cfg.get("model") or DEFAULT_MODELS["gemini"]), "apiKey": gemini_key}
     if anthropic_key:
-        return {"provider": "anthropic", "model": explicit_model or DEFAULT_MODELS["anthropic"], "apiKey": anthropic_key}
+        return {"provider": "anthropic", "model": explicit_model or str(anthropic_cfg.get("model") or DEFAULT_MODELS["anthropic"]), "apiKey": anthropic_key}
     if openai_key:
-        return {"provider": "openai", "model": explicit_model or DEFAULT_MODELS["openai"], "apiKey": openai_key}
+        return {"provider": "openai", "model": explicit_model or str(openai_cfg.get("model") or DEFAULT_MODELS["openai"]), "apiKey": openai_key}
     if ollama_host:
-        return {"provider": "ollama", "model": explicit_model or str(config.get("ollamaModel") or DEFAULT_MODELS["ollama"]), "host": validate_ollama_host(ollama_host)}
-    return {"provider": "agent", "model": explicit_model}
+        return {"provider": "ollama", "model": explicit_model or str(ollama_cfg.get("model") or DEFAULT_MODELS["ollama"]), "host": validate_ollama_host(ollama_host)}
+    return {"provider": "agent", "model": explicit_model or str(agent_cfg.get("model") or "")}
 
 
 def prepare_image(image_path: str, crop: dict | None, max_dim: int = 1920) -> tuple[bytes, str, str]:
