@@ -6,7 +6,7 @@ Summon ScreenLens over any window or workspace, circle/drag a region or select o
 
 > **Public Beta (`v0.9.1`):** ScreenLens is in active beta for early Omarchy testers. Bug reports and ideas are very welcome in [Issues](https://github.com/cgranier/screenlens/issues).
 
-![ScreenLens Settings panel on Omarchy](docs/settings-hero.png)
+![ScreenLens overlay chatting live over a browser window](docs/overlay-demo.png)
 
 ## Features
 
@@ -26,6 +26,10 @@ Summon ScreenLens over any window or workspace, circle/drag a region or select o
   - **Language & OCR:** Pick your default translation language, toggle active Tesseract OCR packs, and install additional Arch `tesseract-data-*` packs directly from Settings.
 
 ## Screenshots
+
+### Settings Panel
+
+![ScreenLens Settings panel on Omarchy](docs/settings-hero.png)
 
 ![ScreenLens Settings tabs — General, Providers, and Language & OCR](docs/settings-showcase.png)
 

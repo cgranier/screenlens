@@ -349,9 +349,19 @@ function inkOn(hexColor) {
   return lum > 0.52 ? "#101315" : "#f5f6fa"
 }
 
-// Parses assistant output into PlainText-safe visual blocks (headings, bullets,
-// fenced code cards, and paragraphs) without ever using RichText/HTML.
-// Handles partially streamed unclosed code fences gracefully.
+// Strips inline markdown markers (**bold**, __bold__, `code`) cleanly so
+// PlainText blocks never show raw asterisks while preserving readable prose.
+function stripInlineMarkdown(text) {
+  var s = String(text || "")
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, "$1")
+  s = s.replace(/__([^_\n]+)__/g, "$1")
+  s = s.replace(/`([^`\n]+)`/g, "$1")
+  return s
+}
+
+// Parses assistant output into PlainText-safe visual blocks (headings, bold
+// subheadings, bullets, fenced code cards, and paragraphs) without ever using
+// RichText/HTML. Handles partially streamed unclosed code fences gracefully.
 function parseAnswerBlocks(rawText) {
   var src = String(rawText || "").replace(/\r\n/g, "\n")
   if (!src.trim()) return []
@@ -365,7 +375,7 @@ function parseAnswerBlocks(rawText) {
 
   function flushPara() {
     if (paraLines.length === 0) return
-    var joined = paraLines.join("\n").trim()
+    var joined = stripInlineMarkdown(paraLines.join("\n")).trim()
     if (joined) blocks.push({ kind: "paragraph", lang: "", text: joined })
     paraLines = []
   }
@@ -402,7 +412,15 @@ function parseAnswerBlocks(rawText) {
     var heading = trimmed.match(/^#{1,4}\s+(.+)$/)
     if (heading) {
       flushPara()
-      blocks.push({ kind: "heading", lang: "", text: heading[1].replace(/\*\*/g, "").trim() })
+      blocks.push({ kind: "heading", lang: "", text: stripInlineMarkdown(heading[1]).trim() })
+      continue
+    }
+
+    // Standalone **Bold line** (e.g. "**Drop these in order of preference:**")
+    var boldLine = trimmed.match(/^\*\*([^*\n]+)\*\*$/)
+    if (boldLine) {
+      flushPara()
+      blocks.push({ kind: "subheading", lang: "", text: boldLine[1].trim() })
       continue
     }
 
@@ -412,7 +430,7 @@ function parseAnswerBlocks(rawText) {
       blocks.push({
         kind: "bullet",
         lang: bullet[1] ? (bullet[1] + ".") : "•",
-        text: bullet[2].trim()
+        text: stripInlineMarkdown(bullet[2]).trim()
       })
       continue
     }

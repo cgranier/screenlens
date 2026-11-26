@@ -761,8 +761,9 @@ Item {
         required property var modelData
         width: blockCol.width
         implicitHeight: headingBlock.visible ? headingBlock.implicitHeight
+          : (subheadingBlock.visible ? subheadingBlock.implicitHeight
           : (bulletBlock.visible ? bulletBlock.implicitHeight
-          : (codeBlock.visible ? codeBlock.implicitHeight : paraBlock.implicitHeight))
+          : (codeBlock.visible ? codeBlock.implicitHeight : paraBlock.implicitHeight)))
 
         PlainText {
           id: headingBlock
@@ -773,6 +774,19 @@ Item {
           color: root.fgColor
           font.family: root.uiFont
           font.pixelSize: Style.font.subtitle
+          font.bold: true
+          wrapMode: Text.Wrap
+        }
+
+        PlainText {
+          id: subheadingBlock
+          visible: modelData.kind === "subheading"
+          width: parent.width
+          topPadding: Style.space(2)
+          text: modelData.text
+          color: root.fgColor
+          font.family: root.uiFont
+          font.pixelSize: Style.font.body
           font.bold: true
           wrapMode: Text.Wrap
         }
@@ -908,7 +922,7 @@ Item {
 
         PlainText {
           id: paraBlock
-          visible: modelData.kind !== "heading" && modelData.kind !== "bullet" && modelData.kind !== "code"
+          visible: modelData.kind !== "heading" && modelData.kind !== "subheading" && modelData.kind !== "bullet" && modelData.kind !== "code"
           width: parent.width
           text: modelData.text
           color: root.fgColor
