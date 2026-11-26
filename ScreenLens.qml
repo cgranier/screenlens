@@ -308,7 +308,14 @@ Item {
     } else if (kind === "summarize") {
       root.submitPrompt("Summarize the key points shown here in concise bullets.", root.inferTask(""))
     } else if (kind === "translate") {
-      root.submitPrompt("Translate any visible text here into English. If it is already in English, briefly clarify any jargon or idioms.", "translate")
+      var targetLang = (root.userConfig && root.userConfig.translateLanguage)
+        ? String(root.userConfig.translateLanguage).trim()
+        : "English"
+      if (!targetLang) targetLang = "English"
+      root.submitPrompt(
+        "Translate any visible text here into " + targetLang + ". If it is already in " + targetLang + ", briefly clarify any jargon or idioms.",
+        "translate"
+      )
     } else if (kind === "extract") {
       root.extractAndCopyText()
     }

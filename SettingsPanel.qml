@@ -59,6 +59,13 @@ Ui.Panel {
   property string customModelDraft: ""
   property string ollamaHostDraft: "http://127.0.0.1:11434"
 
+  // Language & OCR tab state
+  property string customTranslateLangDraft: ""
+  property var ocrInstalled: []
+  property var ocrAvailable: []
+  property string selectedOcrInstallCode: ""
+  property bool installingOcrPack: false
+
   implicitWidth: barButton.implicitWidth
   implicitHeight: barButton.implicitHeight
 
@@ -102,10 +109,56 @@ Ui.Panel {
   function loadState() {
     loadConfigProc.running = false
     loadConfigProc.running = true
+    ocrStatusProc.running = false
+    ocrStatusProc.running = true
     if (Object.keys(root.catalog).length === 0) {
       loadCatalogProc.running = false
       loadCatalogProc.running = true
     }
+  }
+
+  function isOcrLangActive(code) {
+    var active = root.cfgVal("ocrLanguages", ["eng"])
+    return Array.isArray(active) && active.indexOf(code) !== -1
+  }
+
+  function toggleOcrLang(code) {
+    var cur = root.cfgVal("ocrLanguages", ["eng"])
+    var list = Array.isArray(cur) ? cur.slice() : ["eng"]
+    var idx = list.indexOf(code)
+    if (idx !== -1) {
+      if (list.length <= 1) {
+        root.setStatus(strings.t("settings.ocrMinOne"), true)
+        return
+      }
+      list.splice(idx, 1)
+    } else {
+      list.push(code)
+    }
+    root.patchConfig({ ocrLanguages: list })
+  }
+
+  function ocrAvailableOptions() {
+    var opts = []
+    for (var i = 0; i < root.ocrAvailable.length; i++) {
+      var item = root.ocrAvailable[i]
+      opts.push({ value: item.code, label: item.name + " (" + item.code + ")" })
+    }
+    return opts
+  }
+
+  function installSelectedOcrPack() {
+    if (root.installingOcrPack || !root.selectedOcrInstallCode) return
+    root.installingOcrPack = true
+    root.setStatus(strings.t("settings.ocrInstalling").arg("tesseract-data-" + root.selectedOcrInstallCode), false)
+    ocrInstallProc.command = [
+      "/usr/bin/python3",
+      root.pluginDir + "/scripts/ocr_langs.py",
+      "install",
+      root.selectedOcrInstallCode
+    ]
+    ocrInstallProc.running = false
+    ocrInstallProc.running = true
   }
 
   function setStatus(msg, isErr) {
@@ -405,6 +458,46 @@ Ui.Panel {
           )
         } else {
           root.setStatus((res && res.error) ? res.error : "Could not refresh models", true)
+        }
+      }
+    }
+  }
+
+  Process {
+    id: ocrStatusProc
+    command: ["/usr/bin/python3", root.pluginDir + "/scripts/ocr_langs.py", "status"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var res = null
+        try { res = JSON.parse(text) } catch (e) { res = null }
+        if (res && res.ok) {
+          root.ocrInstalled = Array.isArray(res.installed) ? res.installed : []
+          root.ocrAvailable = Array.isArray(res.available) ? res.available : []
+          if (root.ocrAvailable.length > 0 && !root.selectedOcrInstallCode) {
+            root.selectedOcrInstallCode = root.ocrAvailable[0].code
+          }
+        }
+      }
+    }
+  }
+
+  Process {
+    id: ocrInstallProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.installingOcrPack = false
+        var res = null
+        try { res = JSON.parse(text) } catch (e) { res = null }
+        if (res && res.ok) {
+          root.ocrInstalled = Array.isArray(res.installed) ? res.installed : root.ocrInstalled
+          root.ocrAvailable = Array.isArray(res.available) ? res.available : root.ocrAvailable
+          root.selectedOcrInstallCode = root.ocrAvailable.length > 0 ? root.ocrAvailable[0].code : ""
+          root.loadState()
+          root.setStatus(strings.t("settings.ocrInstalled").arg(String(res.installedPkg || "pack")), false)
+        } else {
+          root.setStatus((res && res.error) ? res.error : strings.t("settings.ocrInstallFailed"), true)
         }
       }
     }
@@ -1326,7 +1419,7 @@ Ui.Panel {
             spacing: Style.spacing.xs
 
             Repeater {
-              model: ["English", "Spanish", "French", "German", "Portuguese", "Japanese"]
+              model: ["English", "Spanish", "French", "German", "Portuguese", "Italian", "Japanese", "Chinese", "Korean"]
               delegate: Ui.Button {
                 foreground: root.fgColor
                 text: modelData
@@ -1338,6 +1431,45 @@ Ui.Panel {
             }
           }
 
+          Row {
+            id: customLangRow
+            width: parent.width
+            spacing: Style.spacing.xs
+
+            Ui.TextField {
+              width: customLangRow.width - saveCustomLangBtn.implicitWidth - customLangRow.spacing
+              text: root.customTranslateLangDraft
+              placeholderText: strings.t("settings.customLangPlaceholder")
+              foreground: root.fgColor
+              accent: root.accentColor
+              onTextEdited: root.customTranslateLangDraft = text
+              onAccepted: {
+                var lang = root.customTranslateLangDraft.trim()
+                if (lang) {
+                  root.patchConfig({ translateLanguage: lang })
+                  root.customTranslateLangDraft = ""
+                }
+              }
+              Keys.onEscapePressed: root.close()
+            }
+
+            Ui.Button {
+              id: saveCustomLangBtn
+              foreground: root.fgColor
+              anchors.verticalCenter: parent.verticalCenter
+              text: strings.t("settings.save")
+              fontSize: Style.font.caption
+              bordered: true
+              onClicked: {
+                var lang = root.customTranslateLangDraft.trim()
+                if (lang) {
+                  root.patchConfig({ translateLanguage: lang })
+                  root.customTranslateLangDraft = ""
+                }
+              }
+            }
+          }
+
           Ui.PanelSectionHeader {
             text: strings.t("settings.ocrLanguages")
             foreground: root.fgColor
@@ -1345,10 +1477,77 @@ Ui.Panel {
 
           PlainText {
             width: parent.width
-            text: strings.t("settings.ocrActive").arg((root.cfgVal("ocrLanguages", ["eng"]) || ["eng"]).join(" + "))
-            color: Util.alpha(root.fgColor, 0.8)
+            text: strings.t("settings.ocrToggleHint")
+            color: Util.alpha(root.fgColor, 0.72)
             font.family: root.uiFont
-            font.pixelSize: Style.font.bodySmall
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.Wrap
+          }
+
+          Flow {
+            width: parent.width
+            spacing: Style.spacing.xs
+
+            Repeater {
+              model: root.ocrInstalled
+              delegate: Ui.Button {
+                foreground: root.fgColor
+                text: modelData.name + " (" + modelData.code + ")"
+                iconText: root.isOcrLangActive(modelData.code) ? "󰄬" : ""
+                fontSize: Style.font.bodySmall
+                bordered: true
+                selected: root.isOcrLangActive(modelData.code)
+                onClicked: root.toggleOcrLang(modelData.code)
+              }
+            }
+          }
+
+          Ui.PanelSectionHeader {
+            visible: root.ocrAvailable.length > 0
+            text: strings.t("settings.ocrDownloadSection")
+            foreground: root.fgColor
+          }
+
+          Row {
+            id: ocrInstallRow
+            visible: root.ocrAvailable.length > 0
+            width: parent.width
+            spacing: Style.spacing.xs
+
+            Ui.Dropdown {
+              width: ocrInstallRow.width - ocrInstallBtn.implicitWidth - ocrInstallRow.spacing
+              showLabel: false
+              value: root.selectedOcrInstallCode
+              options: root.ocrAvailableOptions()
+              foreground: root.fgColor
+              background: root.bgColor
+              accent: root.accentColor
+              onChanged: function(nextCode) {
+                root.selectedOcrInstallCode = nextCode
+              }
+            }
+
+            Ui.Button {
+              id: ocrInstallBtn
+              foreground: root.fgColor
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.installingOcrPack ? strings.t("settings.installing") : strings.t("settings.installPack")
+              iconText: "󰇚"
+              iconSpinning: root.installingOcrPack
+              fontSize: Style.font.caption
+              bordered: true
+              selected: true
+              onClicked: root.installSelectedOcrPack()
+            }
+          }
+
+          PlainText {
+            visible: root.selectedOcrInstallCode.length > 0
+            width: parent.width
+            text: strings.t("settings.ocrCliHint").arg("omarchy pkg add tesseract-data-" + root.selectedOcrInstallCode)
+            color: Util.alpha(root.fgColor, 0.65)
+            font.family: root.uiFont
+            font.pixelSize: Style.font.caption
             wrapMode: Text.Wrap
           }
         }
