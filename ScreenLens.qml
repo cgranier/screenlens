@@ -52,6 +52,9 @@ Item {
   property string providerLabel: ""
   property string errorMessage: ""
   property string toastMessage: ""
+  property int loadingTick: 0
+  property real loadingElapsedSec: 0
+  readonly property var spinnerFrames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
   // Superwhisper voice state: "idle" | "recording" | "transcribing"
   property string voiceState: "idle"
@@ -214,6 +217,8 @@ Item {
 
     root.errorMessage = ""
     root.streamingText = ""
+    root.loadingTick = 0
+    root.loadingElapsedSec = 0
     root.streaming = true
 
     var payload = {
@@ -443,6 +448,19 @@ Item {
     interval: 2200
     repeat: false
     onTriggered: root.toastMessage = ""
+  }
+
+  // Drives crisp activity feedback (braille spinner, progress bar, elapsed seconds)
+  // even when compositor animations are turned off (`Style.reduceMotion`).
+  Timer {
+    id: loadingTimer
+    interval: 120
+    repeat: true
+    running: root.streaming && root.streamingText.length === 0
+    onTriggered: {
+      root.loadingTick = (root.loadingTick + 1) % 1000
+      root.loadingElapsedSec += 0.12
+    }
   }
 
   Process {
@@ -1099,50 +1117,112 @@ Item {
                 }
               }
 
-              // Clear animated loading banner while waiting for the first token
+              // High-contrast active loading banner (moves even with animations off)
               Rectangle {
                 id: loadingBanner
                 visible: root.streaming && root.streamingText.length === 0
                 width: answerColumn.width
                 radius: Math.min(4, root.cornerRadius)
-                color: Util.alpha(root.accentColor, 0.12)
-                border.width: 1
-                border.color: Util.alpha(root.accentColor, 0.45)
-                implicitHeight: loadingRow.implicitHeight + Style.spacing.sm * 2
+                color: Util.alpha(root.accentColor, 0.24)
+                border.width: 2
+                border.color: root.accentColor
+                clip: true
+                implicitHeight: loadingRow.implicitHeight + Style.spacing.md * 2 + Style.space(4)
 
-                Row {
+                // Solid accent left bar for instant visual pop
+                Rectangle {
+                  anchors.left: parent.left
+                  anchors.top: parent.top
+                  anchors.bottom: parent.bottom
+                  width: Style.space(5)
+                  color: root.accentColor
+                }
+
+                Item {
                   id: loadingRow
                   anchors.left: parent.left
                   anchors.right: parent.right
-                  anchors.verticalCenter: parent.verticalCenter
-                  anchors.margins: Style.spacing.sm
-                  spacing: Style.spacing.sm
+                  anchors.top: parent.top
+                  anchors.leftMargin: Style.spacing.md + Style.space(6)
+                  anchors.rightMargin: Style.spacing.md
+                  anchors.topMargin: Style.spacing.md
+                  implicitHeight: Math.max(spinnerPill.implicitHeight, loadingTitle.implicitHeight)
 
-                  PlainText {
-                    id: loadingSpinner
+                  // High-contrast inverted accent pill with live spinner
+                  Rectangle {
+                    id: spinnerPill
+                    anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
-                    text: "󰑓"
+                    radius: Math.min(4, root.cornerRadius)
                     color: root.accentColor
-                    font.family: root.uiFont
-                    font.pixelSize: Style.font.icon
-                    transformOrigin: Item.Center
+                    implicitWidth: spinnerGlyph.implicitWidth + Style.space(14)
+                    implicitHeight: spinnerGlyph.implicitHeight + Style.space(6)
 
-                    RotationAnimation on rotation {
-                      from: 0
-                      to: 360
-                      duration: Style.duration(900)
-                      loops: Animation.Infinite
-                      running: loadingBanner.visible && !Style.reduceMotion
+                    PlainText {
+                      id: spinnerGlyph
+                      anchors.centerIn: parent
+                      text: root.spinnerFrames[root.loadingTick % root.spinnerFrames.length]
+                      color: root.bgColor
+                      font.family: root.uiFont
+                      font.pixelSize: Style.font.body
+                      font.bold: true
                     }
                   }
 
                   PlainText {
+                    id: loadingTitle
+                    anchors.left: spinnerPill.right
+                    anchors.leftMargin: Style.spacing.sm
+                    anchors.right: elapsedBadge.left
+                    anchors.rightMargin: Style.spacing.sm
                     anchors.verticalCenter: parent.verticalCenter
                     text: strings.t("status.analyzing")
                     color: root.fgColor
                     font.family: root.uiFont
                     font.pixelSize: Style.font.body
                     font.bold: true
+                    elide: Text.ElideRight
+                  }
+
+                  Rectangle {
+                    id: elapsedBadge
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    radius: Math.min(4, root.cornerRadius)
+                    color: Util.alpha(root.bgColor, 0.72)
+                    border.width: 1
+                    border.color: Util.alpha(root.accentColor, 0.65)
+                    implicitWidth: elapsedLabel.implicitWidth + Style.space(12)
+                    implicitHeight: elapsedLabel.implicitHeight + Style.space(4)
+
+                    PlainText {
+                      id: elapsedLabel
+                      anchors.centerIn: parent
+                      text: Commons.I18n.formatNumber(root.loadingElapsedSec, 1) + "s"
+                      color: root.accentColor
+                      font.family: root.uiFont
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
+                    }
+                  }
+                }
+
+                // Sweeping accent activity bar along the bottom edge
+                Rectangle {
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.bottom: parent.bottom
+                  height: Style.space(3)
+                  color: Util.alpha(root.accentColor, 0.22)
+
+                  Rectangle {
+                    readonly property real trackWidth: parent.width
+                    readonly property real barWidth: Math.max(Style.space(48), trackWidth * 0.28)
+                    readonly property real phase: ((root.loadingTick * 0.06) % 1.0)
+                    x: -barWidth + phase * (trackWidth + barWidth)
+                    width: barWidth
+                    height: parent.height
+                    color: root.accentColor
                   }
                 }
               }
