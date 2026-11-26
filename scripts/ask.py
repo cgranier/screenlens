@@ -381,7 +381,12 @@ def detect_default_agent() -> str:
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
-def build_agent_cli_command(agent: str, full_prompt: str, model: str = "") -> list[str] | None:
+def build_agent_cli_command(
+    agent: str,
+    full_prompt: str,
+    model: str = "",
+    image_path: str = "",
+) -> list[str] | None:
     clean_model = "" if (not model or model == "default") else model.strip()
     if agent == "claude":
         return [
@@ -409,21 +414,44 @@ def build_agent_cli_command(agent: str, full_prompt: str, model: str = "") -> li
             full_prompt,
         ]
     if agent == "agy":
-        cmd = ["agy"]
+        cmd = [
+            "agy",
+            "--add-dir",
+            "/tmp",
+            "--disable-slash-commands",
+            "--effort",
+            "low",
+            "--output-format",
+            "stream-json",
+        ]
         if clean_model:
             cmd.extend(["--model", clean_model])
         cmd.extend(["-p", full_prompt])
         return cmd
     if agent == "codex":
-        cmd = ["codex", "exec"]
+        cmd = [
+            "codex",
+            "exec",
+            "--skip-git-repo-check",
+            "--ephemeral",
+            "-s",
+            "read-only",
+            "--color",
+            "never",
+            "--json",
+        ]
         if clean_model:
             cmd.extend(["-m", clean_model])
-        cmd.append(full_prompt)
+        if image_path:
+            cmd.extend(["-i", image_path])
+        cmd.extend(["--", full_prompt])
         return cmd
     if agent == "opencode":
-        cmd = ["opencode", "run"]
+        cmd = ["opencode", "run", "--archived", "--format", "json"]
         if clean_model:
             cmd.extend(["-m", clean_model])
+        if image_path:
+            cmd.extend(["-f", image_path])
         cmd.append(full_prompt)
         return cmd
     if agent == "gemini":
@@ -433,7 +461,21 @@ def build_agent_cli_command(agent: str, full_prompt: str, model: str = "") -> li
         cmd.extend(["-p", full_prompt])
         return cmd
     if agent == "grok":
-        cmd = ["grok"]
+        cmd = [
+            "grok",
+            "--add-dir",
+            "/tmp",
+            "--no-memory",
+            "--no-plan",
+            "--no-subagents",
+            "--disable-web-search",
+            "--tools",
+            "Read",
+            "--allow",
+            "Read",
+            "--output-format",
+            "plain",
+        ]
         if clean_model:
             cmd.extend(["-m", clean_model])
         cmd.extend(["-p", full_prompt])
@@ -466,6 +508,93 @@ def parse_claude_stream_json_line(line: str) -> tuple[str, str]:
     return "", ""
 
 
+def parse_agy_stream_json_line(line: str) -> tuple[str, str, str]:
+    """Return (delta_text, final_fallback_text, error_msg) from an agy stream-json line."""
+    raw = line.strip()
+    if not raw or not raw.startswith("{"):
+        return "", "", ""
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        return "", "", ""
+    if not isinstance(obj, dict):
+        return "", "", ""
+    ev = obj.get("event")
+    if ev == "step_update":
+        su = obj.get("step_update") or {}
+        if su.get("step_type") == "agent_response":
+            td = su.get("text_delta")
+            if isinstance(td, str) and td:
+                return td, "", ""
+    elif ev == "result":
+        res = obj.get("result") or {}
+        resp = res.get("response")
+        if isinstance(resp, str) and resp:
+            return "", resp, ""
+    elif ev == "error":
+        msg = str(obj.get("message") or (obj.get("error") or {}).get("message") or "agy error")
+        return "", "", msg
+    return "", "", ""
+
+
+def parse_codex_jsonl_line(line: str) -> tuple[str, str, str]:
+    """Return (delta_text, final_fallback_text, error_msg) from a `codex exec --json` line."""
+    raw = line.strip()
+    if not raw or not raw.startswith("{"):
+        return "", "", ""
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        return "", "", ""
+    if not isinstance(obj, dict):
+        return "", "", ""
+    ev_type = str(obj.get("type") or "")
+    if ev_type in ("item.completed", "item.updated"):
+        item = obj.get("item") or {}
+        if item.get("type") in ("agent_message", "message", "assistant_message"):
+            txt = item.get("text")
+            if isinstance(txt, str) and txt:
+                return (txt, "", "") if ev_type == "item.completed" else ("", txt, "")
+            content = item.get("content")
+            if isinstance(content, list):
+                parts = [str(c.get("text") or "") for c in content if isinstance(c, dict) and c.get("text")]
+                joined = "".join(parts)
+                if joined:
+                    return (joined, "", "") if ev_type == "item.completed" else ("", joined, "")
+    elif ev_type in ("item.delta", "agent_message.delta", "response.output_text.delta"):
+        delta = obj.get("delta") or obj.get("text")
+        if isinstance(delta, str) and delta:
+            return delta, "", ""
+    elif ev_type in ("error", "turn.failed"):
+        msg = str(obj.get("message") or (obj.get("error") or {}).get("message") or "codex failed")
+        return "", "", msg
+    return "", "", ""
+
+
+def parse_opencode_jsonl_line(line: str) -> tuple[str, str, str]:
+    """Return (delta_text, final_fallback_text, error_msg) from an `opencode run --format json` line."""
+    raw = line.strip()
+    if not raw or not raw.startswith("{"):
+        return "", "", ""
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        return "", "", ""
+    if not isinstance(obj, dict):
+        return "", "", ""
+    ev_type = str(obj.get("type") or "")
+    if ev_type == "text":
+        part = obj.get("part") or {}
+        txt = part.get("text") if isinstance(part, dict) else obj.get("text")
+        if isinstance(txt, str) and txt:
+            return txt, "", ""
+    elif ev_type == "error":
+        err = obj.get("error")
+        msg = str(err.get("message") if isinstance(err, dict) else (obj.get("message") or err or "opencode error"))
+        return "", "", msg
+    return "", "", ""
+
+
 def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict], model: str = "", cli: str = "default") -> None:
     agent = cli if (cli and cli != "default") else detect_default_agent()
     if not agent:
@@ -474,8 +603,8 @@ def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict
                 "type": "error",
                 "message": (
                     "No Vision API key configured and no Omarchy default agent is set. "
-                    "Add a Gemini, Anthropic, or OpenAI key to ~/.config/omarchy/screenlens.json "
-                    "(or set GEMINI_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY), or run `omarchy default agent`."
+                    "Add a Gemini, Anthropic, or OpenAI key in ScreenLens Settings, "
+                    "or run `omarchy default agent`."
                 ),
             }
         )
@@ -483,7 +612,10 @@ def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict
 
     lines = [SYSTEM_PROMPT]
     if saved_image_path:
-        lines.append(f"Use the Read tool to inspect the screenshot image file at: {saved_image_path}")
+        if agent in ("codex", "opencode"):
+            lines.append("Inspect the attached screenshot image to answer the user's question.")
+        else:
+            lines.append(f"Inspect the screenshot image file at {saved_image_path} using your file-reading tool.")
     for turn in history[-MAX_HISTORY_TURNS:]:
         role = "Assistant" if turn.get("role") == "assistant" else "User"
         text = str(turn.get("text") or "").strip()
@@ -492,20 +624,21 @@ def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict
     lines.append(f"User: {user_text}")
     full_prompt = "\n\n".join(lines)
 
-    cmd = build_agent_cli_command(agent, full_prompt, model=model)
+    cmd = build_agent_cli_command(agent, full_prompt, model=model, image_path=saved_image_path)
     if not cmd or not shutil.which(cmd[0]):
         emit(
             {
                 "type": "error",
                 "message": (
-                    f"Direct Vision API key not set, and CLI agent '{agent}' does not support inline streaming here. "
-                    "Add an API key to ~/.config/omarchy/screenlens.json or click 'Continue in Agent'."
+                    f"Direct Vision API key not set, and CLI agent '{agent}' is not available on PATH. "
+                    "Configure a provider in ScreenLens Settings or click 'Continue in Agent'."
                 ),
             }
         )
         return
 
-    display_model = (model or "haiku") if agent == "claude" else agent
+    clean_model = "" if (not model or model == "default") else model.strip()
+    display_model = (clean_model or "haiku") if agent == "claude" else (clean_model or agent)
     emit({"type": "meta", "provider": f"agent:{agent}", "model": display_model, "croppedPath": saved_image_path})
     proc = subprocess.Popen(
         cmd,
@@ -516,12 +649,23 @@ def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict
     )
     total = 0
     final_fallback = ""
+    last_json_error = ""
     assert proc.stdout is not None
-    if agent == "claude":
+    if agent in ("claude", "agy", "codex", "opencode"):
         for line in proc.stdout:
-            delta, fallback = parse_claude_stream_json_line(line)
+            if agent == "claude":
+                delta, fallback = parse_claude_stream_json_line(line)
+                err_msg = ""
+            elif agent == "agy":
+                delta, fallback, err_msg = parse_agy_stream_json_line(line)
+            elif agent == "codex":
+                delta, fallback, err_msg = parse_codex_jsonl_line(line)
+            else:
+                delta, fallback, err_msg = parse_opencode_jsonl_line(line)
             if fallback:
                 final_fallback = fallback
+            if err_msg:
+                last_json_error = err_msg
             if not delta:
                 continue
             remaining = MAX_RESPONSE_CHARS - total
@@ -544,8 +688,8 @@ def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict
             emit({"type": "delta", "text": chunk})
     stderr_text = proc.stderr.read().strip() if proc.stderr else ""
     code = proc.wait()
-    if code != 0 and total == 0:
-        emit({"type": "error", "message": stderr_text or f"{agent} exited with code {code}"})
+    if (code != 0 or last_json_error) and total == 0:
+        emit({"type": "error", "message": last_json_error or stderr_text or f"{agent} exited with code {code}"})
         return
     emit({"type": "done"})
 

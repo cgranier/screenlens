@@ -187,6 +187,54 @@ class ScreenLensTests(unittest.TestCase):
         self.assertIn("haiku", cmd)
         self.assertIn("--strict-mcp-config", cmd)
 
+        # Verify tuned headless commands and streaming parsers for agy, codex, opencode, grok
+        agy_cmd = ask_mod.build_agent_cli_command("agy", "describe", model="gemini-3-flash")
+        self.assertIn("--add-dir", agy_cmd)
+        self.assertIn("/tmp", agy_cmd)
+        self.assertIn("stream-json", agy_cmd)
+        self.assertIn("gemini-3-flash", agy_cmd)
+        self.assertEqual(
+            ask_mod.parse_agy_stream_json_line(
+                json.dumps({"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "Hi"}})
+            ),
+            ("Hi", "", ""),
+        )
+        self.assertEqual(
+            ask_mod.parse_agy_stream_json_line(json.dumps({"event": "result", "result": {"response": "Full"}})),
+            ("", "Full", ""),
+        )
+
+        codex_cmd = ask_mod.build_agent_cli_command("codex", "describe", model="gpt-5", image_path="/tmp/shot.png")
+        self.assertIn("--skip-git-repo-check", codex_cmd)
+        self.assertIn("--ephemeral", codex_cmd)
+        self.assertIn("-i", codex_cmd)
+        self.assertIn("/tmp/shot.png", codex_cmd)
+        self.assertIn("--", codex_cmd)
+        self.assertEqual(
+            ask_mod.parse_codex_jsonl_line(
+                json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "Answer"}})
+            ),
+            ("Answer", "", ""),
+        )
+        self.assertEqual(
+            ask_mod.parse_codex_jsonl_line(json.dumps({"type": "error", "message": "401 Unauthorized"})),
+            ("", "", "401 Unauthorized"),
+        )
+
+        oc_cmd = ask_mod.build_agent_cli_command("opencode", "describe", image_path="/tmp/shot.png")
+        self.assertIn("--archived", oc_cmd)
+        self.assertIn("-f", oc_cmd)
+        self.assertIn("/tmp/shot.png", oc_cmd)
+        self.assertEqual(
+            ask_mod.parse_opencode_jsonl_line(json.dumps({"type": "text", "part": {"type": "text", "text": "Reply"}})),
+            ("Reply", "", ""),
+        )
+
+        grok_cmd = ask_mod.build_agent_cli_command("grok", "describe")
+        self.assertIn("--add-dir", grok_cmd)
+        self.assertIn("--no-memory", grok_cmd)
+        self.assertIn("plain", grok_cmd)
+
         prompt = actions_mod.build_single_line_handoff_prompt(
             "/tmp/ctx.md", "/tmp/crop.png", "/tmp/full.png", "line1\nline2\r\nline3"
         )
