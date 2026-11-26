@@ -23,11 +23,13 @@ chmod +x "$STAGE_DIR"/scripts/*.py
 omarchy plugin validate "$STAGE_DIR"
 rm -rf "$TARGET_DIR"
 mv "$STAGE_DIR" "$TARGET_DIR"
-omarchy-shell shell rescanPlugins >/dev/null || true
 
-# Wait briefly for rescan before enabling
-for _ in $(seq 1 30); do
-  if omarchy plugin list --json | jq -e --arg id "$PLUGIN_ID" 'any(.[]; .id == $id)' >/dev/null 2>&1; then
+# Qt6 caches compiled QML by file:// URL across in-process plugin rescans, so
+# restart omarchy-shell to ensure updated QML is compiled fresh from disk.
+omarchy restart shell >/dev/null 2>&1 || true
+
+for _ in $(seq 1 40); do
+  if omarchy plugin list --json 2>/dev/null | jq -e --arg id "$PLUGIN_ID" 'any(.[]; .id == $id)' >/dev/null 2>&1; then
     break
   fi
   sleep 0.1
