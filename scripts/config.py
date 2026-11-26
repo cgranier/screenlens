@@ -14,12 +14,35 @@ import time
 
 CONFIG_PATH = os.path.expanduser("~/.config/omarchy/screenlens.json")
 BINDINGS_PATH = os.path.expanduser("~/.config/hypr/bindings.lua")
-PLUGIN_ID = "carlos.screenlens"
+HYPRLAND_PATH = os.path.expanduser("~/.config/hypr/hyprland.lua")
+LAYER_NAMESPACE = "screenlens"
+
+
+def _load_plugin_id() -> str:
+    manifest_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "manifest.json")
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        pid = str(data.get("id") or "").strip()
+        if pid:
+            return pid
+    except (OSError, json.JSONDecodeError):
+        pass
+    return "io.github.cgranier.screenlens"
+
+
+PLUGIN_ID = _load_plugin_id()
 
 BLOCK_BEGIN = "-- ScreenLens: begin. Managed by ScreenLens settings; delete block to remove."
 BLOCK_END = "-- ScreenLens: end."
 LEGACY_MARKER_RE = re.compile(
-    r"(?m)^-- ScreenLens:[^\n]*\n(?:o\.(?:re)?bind\([^\n]*carlos\.screenlens[^\n]*\)\n?)"
+    r"(?m)^-- ScreenLens:[^\n]*\n(?:o\.(?:re)?bind\([^\n]*(?:carlos\.screenlens|io\.github\.cgranier\.screenlens)[^\n]*\)\n?)"
+)
+
+LAYER_BLOCK_BEGIN = "-- ScreenLens layer rule: begin. Managed by ScreenLens; delete block to remove."
+LAYER_BLOCK_END = "-- ScreenLens layer rule: end."
+LEGACY_LAYER_RE = re.compile(
+    r"(?m)^-- ScreenLens:[^\n]*\n(?:hl\.layer_rule\([^\n]*(?:carlos-screenlens|screenlens)[^\n]*\)\n?)"
 )
 
 ALLOWED_MODS = {"SUPER", "CTRL", "ALT", "SHIFT"}
@@ -300,11 +323,81 @@ def read_keybind_from_bindings(bindings_path: str = BINDINGS_PATH) -> str:
             text = f.read()
     except OSError:
         return ""
+    escaped_id = re.escape(PLUGIN_ID)
     match = re.search(
-        r'o\.(?:re)?bind\(\s*"([^"]+)"\s*,\s*"[^"]*"\s*,\s*\{\s*panel\s*=\s*"carlos\.screenlens"\s*\}\s*\)',
+        rf'o\.(?:re)?bind\(\s*"([^"]+)"\s*,\s*"[^"]*"\s*,\s*\{{\s*panel\s*=\s*"(?:{escaped_id}|carlos\.screenlens)"\s*\}}\s*\)',
         text,
     )
     return match.group(1) if match else ""
+
+
+def render_layer_rule_block(namespace: str = LAYER_NAMESPACE) -> str:
+    return "\n".join(
+        [
+            LAYER_BLOCK_BEGIN,
+            f'hl.layer_rule({{ match = {{ namespace = "{namespace}" }}, no_anim = true, animation = "none" }})',
+            LAYER_BLOCK_END,
+        ]
+    )
+
+
+def apply_layer_rule_text(existing: str, namespace: str = LAYER_NAMESPACE) -> str:
+    block = render_layer_rule_block(namespace)
+    begin_idx = existing.find(LAYER_BLOCK_BEGIN)
+    end_idx = existing.find(LAYER_BLOCK_END)
+    if begin_idx != -1 and end_idx != -1 and end_idx > begin_idx:
+        after_end = end_idx + len(LAYER_BLOCK_END)
+        return existing[:begin_idx] + block + existing[after_end:]
+
+    cleaned = LEGACY_LAYER_RE.sub("", existing).rstrip()
+    if not cleaned:
+        return block + "\n"
+    return cleaned + "\n\n" + block + "\n"
+
+
+def ensure_layer_rule(
+    hyprland_path: str = HYPRLAND_PATH,
+    namespace: str = LAYER_NAMESPACE,
+    reload_hyprland: bool = True,
+) -> dict:
+    existing = ""
+    had_file = os.path.isfile(hyprland_path)
+    if had_file:
+        with open(hyprland_path, "r", encoding="utf-8") as f:
+            existing = f.read()
+
+    updated = apply_layer_rule_text(existing, namespace=namespace)
+    if updated == existing:
+        return {"ok": True, "changed": False, "namespace": namespace, "backup": ""}
+
+    backup_path = ""
+    if had_file:
+        backup_path = f"{hyprland_path}.bak.{int(time.time())}"
+        shutil.copy2(hyprland_path, backup_path)
+
+    parent = os.path.dirname(os.path.abspath(hyprland_path))
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".hyprland.", suffix=".tmp", dir=parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(updated)
+        os.replace(tmp_path, hyprland_path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+    if reload_hyprland:
+        ok, err_msg = validate_hyprland()
+        if not ok:
+            if had_file and backup_path and os.path.isfile(backup_path):
+                shutil.copy2(backup_path, hyprland_path)
+                subprocess.run(["hyprctl", "reload"], capture_output=True, timeout=10)
+            raise RuntimeError(f"Hyprland rejected layer rule (rolled back): {err_msg}")
+
+    return {"ok": True, "changed": True, "namespace": namespace, "backup": backup_path}
 
 
 def validate_hyprland() -> tuple[bool, str]:
@@ -372,6 +465,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Manage ScreenLens config and Hyprland keybind.")
     parser.add_argument("--config", default=CONFIG_PATH)
     parser.add_argument("--bindings", default=BINDINGS_PATH)
+    parser.add_argument("--hyprland", default=HYPRLAND_PATH)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p_get = sub.add_parser("get")
@@ -386,6 +480,10 @@ def main() -> int:
     p_kb.add_argument("chord")
     p_kb.add_argument("--rebind", action="store_true")
     p_kb.add_argument("--no-reload", action="store_true")
+    p_kb.add_argument("--ensure-layer-rule", action="store_true")
+
+    p_layer = sub.add_parser("ensure-layer-rule")
+    p_layer.add_argument("--no-reload", action="store_true")
 
     sub.add_parser("get-keybind")
 
@@ -423,11 +521,24 @@ def main() -> int:
             return 0
 
         if args.cmd == "set-keybind":
+            if args.ensure_layer_rule:
+                ensure_layer_rule(
+                    hyprland_path=args.hyprland,
+                    reload_hyprland=False,
+                )
             res = set_keybind(
                 args.chord,
                 rebind=args.rebind,
                 bindings_path=args.bindings,
                 config_path=args.config,
+                reload_hyprland=not args.no_reload,
+            )
+            print(json.dumps(res), flush=True)
+            return 0
+
+        if args.cmd == "ensure-layer-rule":
+            res = ensure_layer_rule(
+                hyprland_path=args.hyprland,
                 reload_hyprland=not args.no_reload,
             )
             print(json.dumps(res), flush=True)

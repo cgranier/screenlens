@@ -12,7 +12,7 @@ import "ScreenLensLogic.js" as Logic
 // top-bar gear button via `omarchy-shell screenlens-settings open`.
 Ui.Panel {
   id: root
-  moduleName: "carlos.screenlens"
+  moduleName: "io.github.cgranier.screenlens"
   ipcTarget: "screenlens-settings"
   manageIpc: false
 
@@ -103,7 +103,7 @@ Ui.Panel {
 
   function launchCapture() {
     root.close()
-    Util.execArgv(["omarchy-shell", "shell", "summon", "carlos.screenlens", "{}"])
+    Util.execArgv(["omarchy-shell", "shell", "summon", root.moduleName, "{}"])
   }
 
   function loadState() {
@@ -296,7 +296,8 @@ Ui.Panel {
       "/usr/bin/python3",
       root.pluginDir + "/scripts/config.py",
       "set-keybind",
-      chord
+      chord,
+      "--ensure-layer-rule"
     ]
     if (root.rebindExisting) cmd.push("--rebind")
     keybindProc.command = cmd

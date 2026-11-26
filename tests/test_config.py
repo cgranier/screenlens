@@ -63,21 +63,38 @@ class ConfigBackendTests(unittest.TestCase):
         self.assertIn(config_mod.BLOCK_BEGIN, updated)
         self.assertIn(config_mod.BLOCK_END, updated)
         self.assertIn('o.rebind("SUPER + SHIFT + S"', updated)
-        self.assertEqual(updated.count("carlos.screenlens"), 1)
+        self.assertEqual(updated.count(config_mod.PLUGIN_ID), 1)
+        self.assertNotIn("carlos.screenlens", updated)
         self.assertIn('o.bind("SUPER + R"', updated)
 
         # Updating again replaces only the managed block in place.
         updated2 = config_mod.apply_bindings_text(updated, "SUPER + ALT + A", rebind=False)
         self.assertEqual(updated2.count(config_mod.BLOCK_BEGIN), 1)
-        self.assertEqual(updated2.count("carlos.screenlens"), 1)
+        self.assertEqual(updated2.count(config_mod.PLUGIN_ID), 1)
         self.assertIn('o.bind("SUPER + ALT + A"', updated2)
+
+    def test_layer_rule_block_migration_and_idempotence(self):
+        legacy = (
+            'require("default.hypr.omarchy")\n\n'
+            '-- ScreenLens: disable compositor layer fade to match stock Omarchy overlays.\n'
+            'hl.layer_rule({ match = { namespace = "carlos-screenlens" }, no_anim = true, animation = "none" })\n'
+        )
+        updated = config_mod.apply_layer_rule_text(legacy)
+        self.assertIn(config_mod.LAYER_BLOCK_BEGIN, updated)
+        self.assertIn(config_mod.LAYER_BLOCK_END, updated)
+        self.assertIn('namespace = "screenlens"', updated)
+        self.assertNotIn("carlos-screenlens", updated)
+        self.assertEqual(config_mod.apply_layer_rule_text(updated), updated)
 
     def test_set_keybind_cli_no_reload(self):
         with tempfile.TemporaryDirectory() as tmp:
             bindings = os.path.join(tmp, "bindings.lua")
+            hyprland = os.path.join(tmp, "hyprland.lua")
             cfg = os.path.join(tmp, "screenlens.json")
             with open(bindings, "w", encoding="utf-8") as f:
                 f.write('-- keep me\no.bind("SUPER + X", "X", "x")\n')
+            with open(hyprland, "w", encoding="utf-8") as f:
+                f.write('require("default.hypr.omarchy")\n')
 
             proc = subprocess.run(
                 [
@@ -87,8 +104,11 @@ class ConfigBackendTests(unittest.TestCase):
                     cfg,
                     "--bindings",
                     bindings,
+                    "--hyprland",
+                    hyprland,
                     "set-keybind",
                     "super + alt + l",
+                    "--ensure-layer-rule",
                     "--no-reload",
                 ],
                 capture_output=True,
@@ -101,6 +121,10 @@ class ConfigBackendTests(unittest.TestCase):
             self.assertTrue(os.path.isfile(res["backup"]))
             self.assertEqual(config_mod.read_keybind_from_bindings(bindings), "SUPER + ALT + L")
             self.assertEqual(config_mod.load_config(cfg)["keybind"], "SUPER + ALT + L")
+            with open(hyprland, "r", encoding="utf-8") as f:
+                hl_text = f.read()
+            self.assertIn(config_mod.LAYER_BLOCK_BEGIN, hl_text)
+            self.assertIn('namespace = "screenlens"', hl_text)
 
 
 if __name__ == "__main__":

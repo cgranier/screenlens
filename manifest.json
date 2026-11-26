@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "carlos.screenlens",
+  "id": "io.github.cgranier.screenlens",
   "name": "ScreenLens",
-  "version": "1.1.0",
-  "author": "carlos",
+  "version": "0.9.0",
+  "author": "Carlos Granier",
   "license": "MIT",
   "description": "Circle-to-Search style on-screen AI overlay with lasso crop, OCR text selection, Superwhisper voice input, agent handoff, and a native Settings panel.",
   "kinds": [

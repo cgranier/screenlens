@@ -125,7 +125,7 @@ Item {
   function dismiss() {
     root.close()
     if (root.shell && typeof root.shell.hide === "function") {
-      root.shell.hide((root.manifest && root.manifest.id) || "carlos.screenlens")
+      root.shell.hide((root.manifest && root.manifest.id) || "io.github.cgranier.screenlens")
     }
   }
 
@@ -695,7 +695,7 @@ Item {
   Ui.OverlayWindow {
     id: panel
     shown: root.opened
-    WlrLayershell.namespace: "carlos-screenlens"
+    WlrLayershell.namespace: "screenlens"
 
     onWidthChanged: if (root.rawOcrWords.length > 0) root.remapOcrWords()
     onHeightChanged: if (root.rawOcrWords.length > 0) root.remapOcrWords()

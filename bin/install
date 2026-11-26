@@ -13,13 +13,15 @@ rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR"
 
 cp "$ROOT_DIR/manifest.json" "$STAGE_DIR/"
+cp "$ROOT_DIR/LICENSE" "$STAGE_DIR/"
+cp "$ROOT_DIR/setup.sh" "$STAGE_DIR/"
 cp "$ROOT_DIR/ScreenLens.qml" "$STAGE_DIR/"
 cp "$ROOT_DIR/SettingsPanel.qml" "$STAGE_DIR/"
 cp "$ROOT_DIR/PlainText.qml" "$STAGE_DIR/"
 cp "$ROOT_DIR/ScreenLensLogic.js" "$STAGE_DIR/"
 cp -R "$ROOT_DIR/scripts" "$STAGE_DIR/"
 cp -R "$ROOT_DIR/i18n" "$STAGE_DIR/"
-chmod +x "$STAGE_DIR"/scripts/*.py
+chmod +x "$STAGE_DIR"/setup.sh "$STAGE_DIR"/scripts/*.py
 
 omarchy plugin validate "$STAGE_DIR"
 rm -rf "$TARGET_DIR"
