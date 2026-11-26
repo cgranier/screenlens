@@ -335,3 +335,96 @@ function dedupeLateVoicePaste(currentText, expectedAfterInsert, transcript) {
   }
   return current
 }
+
+// Picks high-contrast foreground ink for a hex color (e.g. text over accent fills).
+function inkOn(hexColor) {
+  var s = String(hexColor || "").trim()
+  var m = s.match(/^#([0-9a-fA-F]{6})/)
+  if (!m) return "#101315"
+  var hex = m[1]
+  var r = parseInt(hex.slice(0, 2), 16) / 255
+  var g = parseInt(hex.slice(2, 4), 16) / 255
+  var b = parseInt(hex.slice(4, 6), 16) / 255
+  var lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+  return lum > 0.52 ? "#101315" : "#f5f6fa"
+}
+
+// Parses assistant output into PlainText-safe visual blocks (headings, bullets,
+// fenced code cards, and paragraphs) without ever using RichText/HTML.
+// Handles partially streamed unclosed code fences gracefully.
+function parseAnswerBlocks(rawText) {
+  var src = String(rawText || "").replace(/\r\n/g, "\n")
+  if (!src.trim()) return []
+
+  var lines = src.split("\n")
+  var blocks = []
+  var inCode = false
+  var codeLang = ""
+  var codeLines = []
+  var paraLines = []
+
+  function flushPara() {
+    if (paraLines.length === 0) return
+    var joined = paraLines.join("\n").trim()
+    if (joined) blocks.push({ kind: "paragraph", lang: "", text: joined })
+    paraLines = []
+  }
+
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i]
+    var fence = line.match(/^\s*```([A-Za-z0-9_+#.-]*)\s*$/)
+    if (fence) {
+      if (!inCode) {
+        flushPara()
+        inCode = true
+        codeLang = (fence[1] || "").trim()
+        codeLines = []
+      } else {
+        blocks.push({ kind: "code", lang: codeLang, text: codeLines.join("\n") })
+        inCode = false
+        codeLang = ""
+        codeLines = []
+      }
+      continue
+    }
+
+    if (inCode) {
+      codeLines.push(line)
+      continue
+    }
+
+    var trimmed = line.trim()
+    if (!trimmed) {
+      flushPara()
+      continue
+    }
+
+    var heading = trimmed.match(/^#{1,4}\s+(.+)$/)
+    if (heading) {
+      flushPara()
+      blocks.push({ kind: "heading", lang: "", text: heading[1].replace(/\*\*/g, "").trim() })
+      continue
+    }
+
+    var bullet = line.match(/^\s*(?:[-*•]|(\d+)\.)\s+(.+)$/)
+    if (bullet) {
+      flushPara()
+      blocks.push({
+        kind: "bullet",
+        lang: bullet[1] ? (bullet[1] + ".") : "•",
+        text: bullet[2].trim()
+      })
+      continue
+    }
+
+    paraLines.push(line)
+  }
+
+  if (inCode) {
+    blocks.push({ kind: "code", lang: codeLang, text: codeLines.join("\n") })
+  } else {
+    flushPara()
+  }
+
+  return blocks
+}

@@ -125,4 +125,32 @@ assert.equal(
   "normal user typing after dictation must not be stripped"
 )
 
+// 8. Contrast ink helper and PlainText-safe answer block parser
+assert.equal(sandbox.inkOn("#f5f6fa"), "#101315")
+assert.equal(sandbox.inkOn("#181a22"), "#f5f6fa")
+
+const parsed = plain(sandbox.parseAnswerBlocks(
+  "## Summary\n\nHere is the fix:\n- First item\n2. Second item\n\n```python\nprint('hi')\n```\n\nDone."
+))
+assert.equal(parsed.length, 6)
+assert.equal(parsed[0].kind, "heading")
+assert.equal(parsed[0].text, "Summary")
+assert.equal(parsed[1].kind, "paragraph")
+assert.equal(parsed[2].kind, "bullet")
+assert.equal(parsed[2].lang, "•")
+assert.equal(parsed[3].kind, "bullet")
+assert.equal(parsed[3].lang, "2.")
+assert.equal(parsed[4].kind, "code")
+assert.equal(parsed[4].lang, "python")
+assert.equal(parsed[4].text, "print('hi')")
+assert.equal(parsed[5].kind, "paragraph")
+assert.equal(parsed[5].text, "Done.")
+
+// Streaming unclosed fence should still render cleanly as a code block
+const streamingParsed = plain(sandbox.parseAnswerBlocks("Intro\n```bash\necho 1"))
+assert.equal(streamingParsed.length, 2)
+assert.equal(streamingParsed[1].kind, "code")
+assert.equal(streamingParsed[1].lang, "bash")
+assert.equal(streamingParsed[1].text, "echo 1")
+
 console.log("test_logic.mjs: ALL PASSED")

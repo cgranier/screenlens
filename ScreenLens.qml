@@ -62,6 +62,7 @@ Item {
   property string voicePromptBefore: ""
   property string voiceExpectedAfterInsert: ""
   property string voiceLastTranscript: ""
+  property int voiceTick: 0
 
   // Pending stdin payloads for Process helpers
   property string pendingAskJson: ""
@@ -88,6 +89,11 @@ Item {
   readonly property color urgentColor: resolvedPalette.urgent
   readonly property color borderColor: resolvedPalette.border
   readonly property color scrimColor: resolvedPalette.scrim
+  readonly property color onAccentInk: Logic.inkOn(String(accentColor))
+  readonly property color restFill: Util.alpha(fgColor, 0.05)
+  readonly property color hoverFill: Util.alpha(fgColor, 0.10)
+  readonly property color hairlineColor: Util.alpha(fgColor, 0.14)
+  readonly property color mutedInk: Util.alpha(fgColor, 0.56)
   readonly property var cardBorderSpec: root.themeMode === "system"
     ? Border.surfaceSpec("menu", "border", borderColor, Math.max(1, Style.space(2)))
     : Border.flat(borderColor, Math.max(1, Style.space(2)))
@@ -522,6 +528,14 @@ Item {
     }
   }
 
+  Timer {
+    id: voicePulseTimer
+    interval: 110
+    repeat: true
+    running: root.voiceState === "recording"
+    onTriggered: root.voiceTick = (root.voiceTick + 1) % 1000
+  }
+
   Process {
     id: loadCfgProc
     command: ["/usr/bin/python3", root.pluginDir + "/scripts/config.py", "get", "--redact"]
@@ -690,6 +704,222 @@ Item {
     }
   }
 
+  // ---------------------------------------------------------------- inline UI helpers
+
+  component FloatingShadow: Item {
+    id: shadowItem
+    property real radius: root.cornerRadius
+    z: -1
+
+    Rectangle {
+      x: 0
+      y: Style.space(6)
+      width: parent.width
+      height: parent.height
+      radius: shadowItem.radius
+      color: "#22000000"
+    }
+
+    Rectangle {
+      x: 0
+      y: Style.space(2)
+      width: parent.width
+      height: parent.height
+      radius: shadowItem.radius
+      color: "#36000000"
+    }
+  }
+
+  component KeyCap: Rectangle {
+    id: cap
+    property string label: ""
+    radius: Math.min(3, root.cornerRadius)
+    color: Util.alpha(root.fgColor, 0.06)
+    border.width: 1
+    border.color: Util.alpha(root.fgColor, 0.16)
+    implicitWidth: capText.implicitWidth + Style.space(8)
+    implicitHeight: capText.implicitHeight + Style.space(3)
+
+    PlainText {
+      id: capText
+      anchors.centerIn: parent
+      text: cap.label
+      color: Util.alpha(root.fgColor, 0.70)
+      font.family: root.uiFont
+      font.pixelSize: Math.max(9, Style.font.caption - 1)
+    }
+  }
+
+  component AnswerBlocks: Column {
+    id: blockCol
+    property var blocks: []
+    spacing: Style.spacing.xs
+
+    Repeater {
+      model: blockCol.blocks
+      delegate: Item {
+        required property var modelData
+        width: blockCol.width
+        implicitHeight: headingBlock.visible ? headingBlock.implicitHeight
+          : (bulletBlock.visible ? bulletBlock.implicitHeight
+          : (codeBlock.visible ? codeBlock.implicitHeight : paraBlock.implicitHeight))
+
+        PlainText {
+          id: headingBlock
+          visible: modelData.kind === "heading"
+          width: parent.width
+          topPadding: Style.space(2)
+          text: modelData.text
+          color: root.fgColor
+          font.family: root.uiFont
+          font.pixelSize: Style.font.subtitle
+          font.bold: true
+          wrapMode: Text.Wrap
+        }
+
+        Item {
+          id: bulletBlock
+          visible: modelData.kind === "bullet"
+          width: parent.width
+          implicitHeight: bulletBody.implicitHeight
+
+          PlainText {
+            id: bulletMarker
+            x: Style.space(2)
+            y: 0
+            text: modelData.lang || "•"
+            color: root.accentColor
+            font.family: root.uiFont
+            font.pixelSize: Style.font.body
+            font.bold: true
+          }
+
+          PlainText {
+            id: bulletBody
+            anchors.left: bulletMarker.right
+            anchors.leftMargin: Style.space(7)
+            anchors.right: parent.right
+            text: modelData.text
+            color: root.fgColor
+            font.family: root.uiFont
+            font.pixelSize: Style.font.body
+            wrapMode: Text.Wrap
+          }
+        }
+
+        Rectangle {
+          id: codeBlock
+          visible: modelData.kind === "code"
+          width: parent.width
+          radius: Math.min(4, root.cornerRadius)
+          color: Util.alpha(root.fgColor, 0.07)
+          border.width: 1
+          border.color: root.hairlineColor
+          implicitHeight: codeHeader.implicitHeight + codeContent.implicitHeight + Style.spacing.sm * 2 + Style.space(6)
+
+          Item {
+            id: codeHeader
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.leftMargin: Style.spacing.sm
+            anchors.rightMargin: Style.spacing.xs
+            anchors.topMargin: Style.space(4)
+            implicitHeight: Math.max(codeLangLabel.implicitHeight, copyCodeBtn.implicitHeight)
+
+            PlainText {
+              id: codeLangLabel
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              text: (modelData.lang || "code").toUpperCase()
+              color: root.mutedInk
+              font.family: root.uiFont
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              font.letterSpacing: 0.8
+            }
+
+            Rectangle {
+              id: copyCodeBtn
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              radius: Math.min(3, root.cornerRadius)
+              color: copyCodeHover.hovered ? root.hoverFill : "transparent"
+              border.width: copyCodeHover.hovered ? 1 : 0
+              border.color: root.hairlineColor
+              implicitWidth: copyCodeRow.implicitWidth + Style.space(10)
+              implicitHeight: copyCodeRow.implicitHeight + Style.space(4)
+
+              Row {
+                id: copyCodeRow
+                anchors.centerIn: parent
+                spacing: Style.space(4)
+
+                PlainText {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "󰆏"
+                  color: copyCodeHover.hovered ? root.accentColor : root.mutedInk
+                  font.family: root.uiFont
+                  font.pixelSize: Style.font.caption
+                }
+
+                PlainText {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: strings.t("action.copy")
+                  color: copyCodeHover.hovered ? root.fgColor : root.mutedInk
+                  font.family: root.uiFont
+                  font.pixelSize: Style.font.caption
+                }
+              }
+
+              HoverHandler { id: copyCodeHover; cursorShape: Qt.PointingHandCursor }
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.copyText(modelData.text)
+              }
+            }
+          }
+
+          Rectangle {
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: codeHeader.bottom
+            anchors.topMargin: Style.space(3)
+            height: 1
+            color: Util.alpha(root.fgColor, 0.08)
+          }
+
+          PlainText {
+            id: codeContent
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: codeHeader.bottom
+            anchors.topMargin: Style.spacing.sm + Style.space(2)
+            anchors.leftMargin: Style.spacing.sm
+            anchors.rightMargin: Style.spacing.sm
+            text: modelData.text
+            color: root.fgColor
+            font.family: root.uiFont
+            font.pixelSize: Style.font.bodySmall
+            wrapMode: Text.WrapAnywhere
+          }
+        }
+
+        PlainText {
+          id: paraBlock
+          visible: modelData.kind !== "heading" && modelData.kind !== "bullet" && modelData.kind !== "code"
+          width: parent.width
+          text: modelData.text
+          color: root.fgColor
+          font.family: root.uiFont
+          font.pixelSize: Style.font.body
+          wrapMode: Text.Wrap
+        }
+      }
+    }
+  }
+
   // ---------------------------------------------------------------- overlay UI
 
   Ui.OverlayWindow {
@@ -704,49 +934,179 @@ Item {
     // Leaving the unselected surface un-tinted keeps the live screen crisp and
     // avoids fullscreen opaque-region quirks on Wayland layer-shell surfaces.
     Item {
+      id: cropOverlay
       anchors.fill: parent
       visible: !!root.selectionRect
       readonly property real rx: root.selectionRect ? root.selectionRect.x : 0
       readonly property real ry: root.selectionRect ? root.selectionRect.y : 0
       readonly property real rw: root.selectionRect ? root.selectionRect.w : 0
       readonly property real rh: root.selectionRect ? root.selectionRect.h : 0
+      readonly property var imgCrop: root.currentImageCrop()
 
       Rectangle { x: 0; y: 0; width: parent.width; height: Math.max(0, parent.ry); color: root.scrimColor }
       Rectangle { x: 0; y: parent.ry + parent.rh; width: parent.width; height: Math.max(0, parent.height - (parent.ry + parent.rh)); color: root.scrimColor }
       Rectangle { x: 0; y: parent.ry; width: Math.max(0, parent.rx); height: parent.rh; color: root.scrimColor }
       Rectangle { x: parent.rx + parent.rw; y: parent.ry; width: Math.max(0, parent.width - (parent.rx + parent.rw)); height: parent.rh; color: root.scrimColor }
 
-      // Accent frame + corner ticks around selected region.
+      // Soft outer accent halo around the locked crop cutout.
+      Rectangle {
+        x: parent.rx - 3
+        y: parent.ry - 3
+        width: parent.rw + 6
+        height: parent.rh + 6
+        radius: Math.min(6, root.cornerRadius + 2)
+        color: "transparent"
+        border.width: 4
+        border.color: Util.alpha(root.accentColor, 0.24)
+      }
+
+      // Crisp inner hairline + machined corner L-brackets.
       Rectangle {
         x: parent.rx
         y: parent.ry
         width: parent.rw
         height: parent.rh
+        radius: Math.min(4, root.cornerRadius)
         color: "transparent"
-        border.width: 2
-        border.color: root.accentColor
+        border.width: 1
+        border.color: Util.alpha(root.accentColor, 0.88)
 
-        readonly property real tick: Math.min(14, width / 3, height / 3)
-        Rectangle { x: 0; y: 0; width: parent.tick; height: 4; color: root.accentColor }
-        Rectangle { x: 0; y: 0; width: 4; height: parent.tick; color: root.accentColor }
-        Rectangle { x: parent.width - parent.tick; y: 0; width: parent.tick; height: 4; color: root.accentColor }
-        Rectangle { x: parent.width - 4; y: 0; width: 4; height: parent.tick; color: root.accentColor }
-        Rectangle { x: 0; y: parent.height - 4; width: parent.tick; height: 4; color: root.accentColor }
-        Rectangle { x: 0; y: parent.height - parent.tick; width: 4; height: parent.tick; color: root.accentColor }
-        Rectangle { x: parent.width - parent.tick; y: parent.height - 4; width: parent.tick; height: 4; color: root.accentColor }
-        Rectangle { x: parent.width - 4; y: parent.height - parent.tick; width: 4; height: parent.tick; color: root.accentColor }
+        readonly property real tick: Math.min(18, Math.max(8, Math.min(width / 3, height / 3)))
+        readonly property real arm: 3
+        readonly property real capRadius: Math.min(2, root.cornerRadius)
+
+        // Top-left bracket
+        Rectangle { x: -1; y: -1; width: parent.tick; height: parent.arm; radius: parent.capRadius; color: root.accentColor }
+        Rectangle { x: -1; y: -1; width: parent.arm; height: parent.tick; radius: parent.capRadius; color: root.accentColor }
+        // Top-right bracket
+        Rectangle { x: parent.width - parent.tick + 1; y: -1; width: parent.tick; height: parent.arm; radius: parent.capRadius; color: root.accentColor }
+        Rectangle { x: parent.width - parent.arm + 1; y: -1; width: parent.arm; height: parent.tick; radius: parent.capRadius; color: root.accentColor }
+        // Bottom-left bracket
+        Rectangle { x: -1; y: parent.height - parent.arm + 1; width: parent.tick; height: parent.arm; radius: parent.capRadius; color: root.accentColor }
+        Rectangle { x: -1; y: parent.height - parent.tick + 1; width: parent.arm; height: parent.tick; radius: parent.capRadius; color: root.accentColor }
+        // Bottom-right bracket
+        Rectangle { x: parent.width - parent.tick + 1; y: parent.height - parent.arm + 1; width: parent.tick; height: parent.arm; radius: parent.capRadius; color: root.accentColor }
+        Rectangle { x: parent.width - parent.arm + 1; y: parent.height - parent.tick + 1; width: parent.arm; height: parent.tick; radius: parent.capRadius; color: root.accentColor }
+      }
+
+      // Compact floating pixel dimension badge tucked at top-left of the crop.
+      Rectangle {
+        visible: !!parent.imgCrop && parent.rw >= 64
+        x: Logic.clamp(parent.rx, Style.gapsOut, Math.max(Style.gapsOut, panel.width - width - Style.gapsOut))
+        y: parent.ry > height + Style.space(12) ? (parent.ry - height - Style.space(6)) : (parent.ry + Style.space(6))
+        radius: Math.min(4, root.cornerRadius)
+        color: Util.alpha(root.bgColor, 0.90)
+        border.width: 1
+        border.color: Util.alpha(root.accentColor, 0.45)
+        implicitWidth: dimLabel.implicitWidth + Style.space(12)
+        implicitHeight: dimLabel.implicitHeight + Style.space(5)
+
+        PlainText {
+          id: dimLabel
+          anchors.centerIn: parent
+          text: cropOverlay.imgCrop
+            ? (Commons.I18n.formatNumber(cropOverlay.imgCrop.w) + " × " + Commons.I18n.formatNumber(cropOverlay.imgCrop.h))
+            : ""
+          color: root.accentColor
+          font.family: root.uiFont
+          font.pixelSize: Style.font.caption
+          font.bold: true
+        }
       }
     }
 
-    // Subtle edge glow so the user feels ScreenLens activate immediately.
-    Rectangle {
+    // Superwhisper-inspired feathered inward-fading edge glow around the active monitor.
+    // Uses 4 directional GPU gradients + a crisp luminous inner rim (zero Canvas/FBO).
+    Item {
+      id: edgeGlow
       anchors.fill: parent
-      color: "transparent"
-      border.width: Math.max(2, Style.space(3))
-      border.color: Util.alpha(root.accentColor, 0.72)
-      opacity: root.opened ? 1 : 0
+      property color glowColor: root.voiceState === "recording" ? root.urgentColor : root.accentColor
+      readonly property bool activeBoost: root.draggingCanvas || root.streaming || root.voiceState === "recording"
+      readonly property real depth: activeBoost ? Style.space(42) : Style.space(32)
+      property real breath: 1.0
+
+      Behavior on glowColor {
+        ColorAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic }
+      }
+
+      SequentialAnimation on breath {
+        running: root.opened && !Style.reduceMotion
+        loops: Animation.Infinite
+        NumberAnimation { to: 0.74; duration: Style.duration(1500); easing.type: Easing.InOutSine }
+        NumberAnimation { to: 1.0; duration: Style.duration(1500); easing.type: Easing.InOutSine }
+      }
+
+      opacity: root.opened ? ((activeBoost ? 1.0 : 0.84) * (Style.reduceMotion ? 1.0 : breath)) : 0
       Behavior on opacity {
         NumberAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic }
+      }
+
+      // Top feathered glow
+      Rectangle {
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: edgeGlow.depth
+        gradient: Gradient {
+          orientation: Gradient.Vertical
+          GradientStop { position: 0.0; color: Util.alpha(edgeGlow.glowColor, 0.34) }
+          GradientStop { position: 0.22; color: Util.alpha(edgeGlow.glowColor, 0.14) }
+          GradientStop { position: 0.58; color: Util.alpha(edgeGlow.glowColor, 0.035) }
+          GradientStop { position: 1.0; color: "transparent" }
+        }
+      }
+
+      // Bottom feathered glow
+      Rectangle {
+        anchors.bottom: parent.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: edgeGlow.depth
+        gradient: Gradient {
+          orientation: Gradient.Vertical
+          GradientStop { position: 0.0; color: "transparent" }
+          GradientStop { position: 0.42; color: Util.alpha(edgeGlow.glowColor, 0.035) }
+          GradientStop { position: 0.78; color: Util.alpha(edgeGlow.glowColor, 0.14) }
+          GradientStop { position: 1.0; color: Util.alpha(edgeGlow.glowColor, 0.34) }
+        }
+      }
+
+      // Left feathered glow
+      Rectangle {
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: edgeGlow.depth
+        gradient: Gradient {
+          orientation: Gradient.Horizontal
+          GradientStop { position: 0.0; color: Util.alpha(edgeGlow.glowColor, 0.34) }
+          GradientStop { position: 0.22; color: Util.alpha(edgeGlow.glowColor, 0.14) }
+          GradientStop { position: 0.58; color: Util.alpha(edgeGlow.glowColor, 0.035) }
+          GradientStop { position: 1.0; color: "transparent" }
+        }
+      }
+
+      // Right feathered glow
+      Rectangle {
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: edgeGlow.depth
+        gradient: Gradient {
+          orientation: Gradient.Horizontal
+          GradientStop { position: 0.0; color: "transparent" }
+          GradientStop { position: 0.42; color: Util.alpha(edgeGlow.glowColor, 0.035) }
+          GradientStop { position: 0.78; color: Util.alpha(edgeGlow.glowColor, 0.14) }
+          GradientStop { position: 1.0; color: Util.alpha(edgeGlow.glowColor, 0.34) }
+        }
+      }
+
+      // Crisp luminous perimeter hairline
+      Rectangle {
+        anchors.fill: parent
+        color: "transparent"
+        border.width: 2
+        border.color: Util.alpha(edgeGlow.glowColor, 0.62)
       }
     }
 
@@ -763,35 +1123,58 @@ Item {
           y: modelData.y - 1
           width: modelData.w + 2
           height: modelData.h + 2
-          radius: 2
+          radius: Math.min(3, Math.max(2, root.cornerRadius))
           color: isSelected
-            ? Util.alpha(root.accentColor, 0.42)
-            : Util.alpha(root.fgColor, 0.14)
+            ? Util.alpha(root.accentColor, 0.38)
+            : Util.alpha(root.fgColor, 0.13)
           border.width: isSelected ? 1 : 0
-          border.color: root.accentColor
+          border.color: Util.alpha(root.accentColor, 0.90)
         }
       }
     }
 
-    // Native GPU-rendered freehand lasso stroke while dragging.
+    // Native GPU-rendered luminous 3-layer freehand lasso stroke while dragging.
     Shape {
       anchors.fill: parent
       visible: root.draggingCanvas && root.mode === "lasso" && root.lassoPathPoints.length > 1
+      preferredRendererType: Shape.CurveRenderer
       antialiasing: true
 
+      // Outer ambient halo
       ShapePath {
         fillColor: "transparent"
-        strokeColor: Util.alpha(root.accentColor, 0.35)
-        strokeWidth: 10
+        strokeColor: Util.alpha(root.accentColor, 0.16)
+        strokeWidth: 20
         capStyle: ShapePath.RoundCap
         joinStyle: ShapePath.RoundJoin
         PathPolyline { path: root.lassoPathPoints }
       }
 
+      // Mid accent glow
+      ShapePath {
+        fillColor: "transparent"
+        strokeColor: Util.alpha(root.accentColor, 0.44)
+        strokeWidth: 9
+        capStyle: ShapePath.RoundCap
+        joinStyle: ShapePath.RoundJoin
+        PathPolyline { path: root.lassoPathPoints }
+      }
+
+      // Primary stroke
       ShapePath {
         fillColor: "transparent"
         strokeColor: root.accentColor
-        strokeWidth: 3
+        strokeWidth: 3.5
+        capStyle: ShapePath.RoundCap
+        joinStyle: ShapePath.RoundJoin
+        PathPolyline { path: root.lassoPathPoints }
+      }
+
+      // Bright luminous filament core
+      ShapePath {
+        fillColor: "transparent"
+        strokeColor: "#b8ffffff"
+        strokeWidth: 1.5
         capStyle: ShapePath.RoundCap
         joinStyle: ShapePath.RoundJoin
         PathPolyline { path: root.lassoPathPoints }
@@ -889,6 +1272,8 @@ Item {
             : Math.min(panel.height - dockContainer.height - height - Style.space(24), anchorBounds.y + anchorBounds.h + Style.space(8)))
         : 0
 
+      FloatingShadow { anchors.fill: parent; radius: selectionBar.radius }
+
       Row {
         id: selectionRow
         anchors.centerIn: parent
@@ -947,13 +1332,13 @@ Item {
     Ui.BorderSurface {
       id: topBar
       anchors.top: parent.top
-      anchors.topMargin: Math.max(Style.gapsOut, Style.space(14))
+      anchors.topMargin: Math.max(Style.gapsOut, Style.space(16))
       anchors.horizontalCenter: parent.horizontalCenter
       color: root.bgColor
       borderSpec: root.cardBorderSpec
       radius: root.cornerRadius
       padding: Style.spacing.xs
-      implicitWidth: topRow.implicitWidth + padding * 2 + Border.left(borderSpec) + Border.right(borderSpec)
+      implicitWidth: topRow.implicitWidth + padding * 2 + Border.left(borderSpec) + Border.right(borderSpec) + Style.space(4)
       implicitHeight: topRow.implicitHeight + padding * 2 + Border.top(borderSpec) + Border.bottom(borderSpec)
 
       opacity: root.opened ? 1 : 0
@@ -961,6 +1346,7 @@ Item {
       Behavior on opacity { NumberAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic } }
       Behavior on scale { NumberAnimation { duration: Style.duration(180); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
 
+      FloatingShadow { anchors.fill: parent; radius: topBar.radius }
       MouseArea { anchors.fill: parent; onClicked: {} }
 
       Row {
@@ -968,26 +1354,105 @@ Item {
         anchors.centerIn: parent
         spacing: Style.spacing.xs
 
-        Ui.Button {
-          foreground: root.fgColor
-          text: strings.t("mode.lasso")
-          iconText: "󰒅"
-          selected: root.mode === "lasso"
-          onClicked: {
-            root.mode = "lasso"
-            promptField.forceActiveFocus()
-          }
-        }
+        // Compact recessed segmented mode switcher (Circle | Select Text)
+        Rectangle {
+          id: modeTrack
+          anchors.verticalCenter: parent.verticalCenter
+          radius: Math.min(4, root.cornerRadius)
+          color: root.restFill
+          border.width: 1
+          border.color: root.hairlineColor
+          implicitWidth: modeSegRow.implicitWidth + Style.space(4)
+          implicitHeight: modeSegRow.implicitHeight + Style.space(4)
 
-        Ui.Button {
-          foreground: root.fgColor
-          text: strings.t("mode.text")
-          iconText: "󰗧"
-          iconSpinning: root.ocrLoading
-          selected: root.mode === "text"
-          onClicked: {
-            root.mode = "text"
-            promptField.forceActiveFocus()
+          Row {
+            id: modeSegRow
+            anchors.centerIn: parent
+            spacing: Style.space(2)
+
+            Rectangle {
+              id: lassoSeg
+              readonly property bool active: root.mode === "lasso"
+              radius: Math.min(3, root.cornerRadius)
+              color: active ? Util.alpha(root.accentColor, 0.22) : (lassoHover.hovered ? root.hoverFill : "transparent")
+              border.width: active ? 1 : 0
+              border.color: Util.alpha(root.accentColor, 0.65)
+              implicitWidth: lassoSegRow.implicitWidth + Style.space(14)
+              implicitHeight: Style.space(24)
+
+              Row {
+                id: lassoSegRow
+                anchors.centerIn: parent
+                spacing: Style.space(5)
+                PlainText {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "󰒅"
+                  color: lassoSeg.active ? root.accentColor : root.mutedInk
+                  font.family: root.uiFont
+                  font.pixelSize: Style.font.body
+                }
+                PlainText {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: strings.t("mode.lasso")
+                  color: lassoSeg.active ? root.fgColor : Util.alpha(root.fgColor, 0.72)
+                  font.family: root.uiFont
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: lassoSeg.active
+                }
+              }
+
+              HoverHandler { id: lassoHover; cursorShape: Qt.PointingHandCursor }
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  root.mode = "lasso"
+                  promptField.forceActiveFocus()
+                }
+              }
+            }
+
+            Rectangle {
+              id: textSeg
+              readonly property bool active: root.mode === "text"
+              radius: Math.min(3, root.cornerRadius)
+              color: active ? Util.alpha(root.accentColor, 0.22) : (textModeHover.hovered ? root.hoverFill : "transparent")
+              border.width: active ? 1 : 0
+              border.color: Util.alpha(root.accentColor, 0.65)
+              implicitWidth: textSegRow.implicitWidth + Style.space(14)
+              implicitHeight: Style.space(24)
+
+              Row {
+                id: textSegRow
+                anchors.centerIn: parent
+                spacing: Style.space(5)
+                PlainText {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "󰗧"
+                  color: textSeg.active ? root.accentColor : root.mutedInk
+                  font.family: root.uiFont
+                  font.pixelSize: Style.font.body
+                }
+                PlainText {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: strings.t("mode.text")
+                  color: textSeg.active ? root.fgColor : Util.alpha(root.fgColor, 0.72)
+                  font.family: root.uiFont
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: textSeg.active
+                }
+              }
+
+              HoverHandler { id: textModeHover; cursorShape: Qt.PointingHandCursor }
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  root.mode = "text"
+                  promptField.forceActiveFocus()
+                }
+              }
+            }
           }
         }
 
@@ -995,31 +1460,55 @@ Item {
           foreground: root.fgColor
           text: strings.t("mode.fullScreen")
           iconText: "󰊓"
+          fontSize: Style.font.bodySmall
           visible: !!root.selectionRect || root.selectedText.length > 0
           onClicked: root.clearSelection()
         }
 
         Rectangle {
           width: 1
-          height: Style.space(18)
+          height: Style.space(16)
           anchors.verticalCenter: parent.verticalCenter
-          color: Util.alpha(root.fgColor, 0.2)
+          color: root.hairlineColor
         }
 
-        PlainText {
+        Row {
           anchors.verticalCenter: parent.verticalCenter
-          leftPadding: Style.spacing.xs
-          rightPadding: Style.spacing.xs
-          text: root.ocrLoading
-            ? strings.t("hint.ocrLoading")
-            : (root.mode === "text"
-                ? (root.ocrWords.length > 0
-                    ? strings.tn("hint.ocrReady", root.ocrWords.length).arg(Commons.I18n.formatNumber(root.ocrWords.length))
-                    : strings.t("hint.ocrEmpty"))
-                : strings.t("hint.lasso"))
-          color: Util.alpha(root.fgColor, 0.72)
-          font.family: root.uiFont
-          font.pixelSize: Style.font.caption
+          spacing: Style.space(6)
+          leftPadding: Style.space(4)
+          rightPadding: Style.space(4)
+
+          // Live OCR status dot
+          Rectangle {
+            anchors.verticalCenter: parent.verticalCenter
+            width: Style.space(6)
+            height: Style.space(6)
+            radius: width / 2
+            color: root.ocrLoading
+              ? root.accentColor
+              : (root.ocrWords.length > 0 ? Util.alpha(root.accentColor, 0.78) : root.mutedInk)
+          }
+
+          PlainText {
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.ocrLoading
+              ? strings.t("hint.ocrLoading")
+              : (root.mode === "text"
+                  ? (root.ocrWords.length > 0
+                      ? strings.tn("hint.ocrReady", root.ocrWords.length).arg(Commons.I18n.formatNumber(root.ocrWords.length))
+                      : strings.t("hint.ocrEmpty"))
+                  : strings.t("hint.lasso"))
+            color: Util.alpha(root.fgColor, 0.68)
+            font.family: root.uiFont
+            font.pixelSize: Style.font.caption
+          }
+        }
+
+        Rectangle {
+          width: 1
+          height: Style.space(16)
+          anchors.verticalCenter: parent.verticalCenter
+          color: root.hairlineColor
         }
 
         Ui.Button {
@@ -1053,24 +1542,41 @@ Item {
       Behavior on opacity { NumberAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic } }
       Behavior on scale { NumberAnimation { duration: Style.duration(180); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
 
-      // Toast strip
+      // Reel-inspired toast pill with leading accent bar
       Ui.BorderSurface {
+        id: toastPill
         visible: root.toastMessage.length > 0
         anchors.horizontalCenter: parent.horizontalCenter
         color: root.bgColor
-        borderSpec: root.cardBorderSpec
+        borderSpec: Border.flat(Util.alpha(root.accentColor, 0.45), 1)
         radius: root.cornerRadius
         padding: Style.spacing.xs
-        implicitWidth: toastLabel.implicitWidth + Style.spacing.md * 2
-        implicitHeight: toastLabel.implicitHeight + Style.spacing.xs * 2
+        implicitWidth: toastRow.implicitWidth + Style.spacing.md * 2
+        implicitHeight: toastRow.implicitHeight + Style.spacing.xs * 2 + Style.space(2)
 
-        PlainText {
-          id: toastLabel
+        FloatingShadow { anchors.fill: parent; radius: toastPill.radius }
+
+        Row {
+          id: toastRow
           anchors.centerIn: parent
-          text: root.toastMessage
-          color: root.accentColor
-          font.family: root.uiFont
-          font.pixelSize: Style.font.bodySmall
+          spacing: Style.space(7)
+
+          Rectangle {
+            anchors.verticalCenter: parent.verticalCenter
+            width: Style.space(6)
+            height: Style.space(6)
+            radius: width / 2
+            color: root.accentColor
+          }
+
+          PlainText {
+            id: toastLabel
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.toastMessage
+            color: root.fgColor
+            font.family: root.uiFont
+            font.pixelSize: Style.font.bodySmall
+          }
         }
       }
 
@@ -1083,13 +1589,15 @@ Item {
         borderSpec: root.cardBorderSpec
         radius: root.cornerRadius
         padding: Style.spacing.panelPadding
-        readonly property real maxBodyHeight: Math.min(panel.height * 0.42, Style.space(420))
+        readonly property real maxBodyHeight: Math.min(panel.height * 0.44, Style.space(440))
         implicitHeight: answerHeader.implicitHeight
+          + 1
           + Math.min(maxBodyHeight, Math.max(Style.space(44), answerColumn.implicitHeight + Style.spacing.sm))
           + Style.spacing.panelPadding * 2
-          + Style.spacing.sm
+          + Style.spacing.sm * 2
           + Border.top(borderSpec) + Border.bottom(borderSpec)
 
+        FloatingShadow { anchors.fill: parent; radius: answerCard.radius }
         MouseArea { anchors.fill: parent; onClicked: {} }
 
         Column {
@@ -1110,23 +1618,24 @@ Item {
               id: providerRow
               anchors.left: parent.left
               anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.spacing.xs
+              spacing: Style.space(6)
 
-              PlainText {
+              Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
-                text: "󰚩"
+                width: Style.space(7)
+                height: Style.space(7)
+                radius: width / 2
                 color: root.accentColor
-                font.family: root.uiFont
-                font.pixelSize: Style.font.icon
               }
 
               PlainText {
                 anchors.verticalCenter: parent.verticalCenter
-                text: root.providerLabel || strings.t("app.title")
-                color: Util.alpha(root.fgColor, 0.78)
+                text: (root.providerLabel || strings.t("app.title")).toUpperCase()
+                color: Util.alpha(root.fgColor, 0.72)
                 font.family: root.uiFont
                 font.pixelSize: Style.font.caption
                 font.bold: true
+                font.letterSpacing: 0.8
               }
 
               PlainText {
@@ -1136,6 +1645,7 @@ Item {
                 color: root.accentColor
                 font.family: root.uiFont
                 font.pixelSize: Style.font.caption
+                font.bold: true
               }
             }
 
@@ -1177,6 +1687,13 @@ Item {
             }
           }
 
+          // Subtle header hairline divider
+          Rectangle {
+            width: parent.width
+            height: 1
+            color: root.hairlineColor
+          }
+
           // Scrollable conversation history
           Flickable {
             id: answerScroll
@@ -1191,53 +1708,85 @@ Item {
 
             Column {
               id: answerColumn
-              width: answerScroll.width - Style.space(8)
+              width: answerScroll.width - Style.space(6)
               spacing: Style.spacing.sm
 
               Repeater {
                 model: root.messages
                 delegate: Rectangle {
+                  required property var modelData
+                  readonly property bool isUser: modelData.role === "user"
                   width: answerColumn.width
                   radius: Math.min(4, root.cornerRadius)
-                  color: modelData.role === "user"
-                    ? Util.alpha(root.accentColor, 0.14)
-                    : Util.alpha(root.fgColor, 0.05)
-                  implicitHeight: msgText.implicitHeight + Style.spacing.sm * 2
+                  color: isUser
+                    ? Util.alpha(root.accentColor, 0.11)
+                    : Util.alpha(root.fgColor, 0.035)
+                  border.width: 1
+                  border.color: isUser
+                    ? Util.alpha(root.accentColor, 0.25)
+                    : Util.alpha(root.fgColor, 0.07)
+                  clip: true
+                  implicitHeight: (isUser ? userMsgText.implicitHeight : assistantBlocks.implicitHeight) + Style.spacing.sm * 2 + Style.space(4)
+
+                  // Subtle 3 px left accent edge on user prompts
+                  Rectangle {
+                    visible: parent.isUser
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: Style.space(3)
+                    color: root.accentColor
+                  }
 
                   PlainText {
-                    id: msgText
+                    id: userMsgText
+                    visible: parent.isUser
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.top: parent.top
-                    anchors.margins: Style.spacing.sm
+                    anchors.leftMargin: Style.spacing.md + Style.space(3)
+                    anchors.rightMargin: Style.spacing.md
+                    anchors.topMargin: Style.spacing.sm + Style.space(2)
                     text: modelData.text
-                    color: modelData.role === "user" ? root.accentColor : root.fgColor
+                    color: root.fgColor
                     font.family: root.uiFont
                     font.pixelSize: Style.font.body
-                    font.bold: modelData.role === "user"
+                    font.bold: true
                     wrapMode: Text.Wrap
+                  }
+
+                  AnswerBlocks {
+                    id: assistantBlocks
+                    visible: !parent.isUser
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.leftMargin: Style.spacing.md
+                    anchors.rightMargin: Style.spacing.md
+                    anchors.topMargin: Style.spacing.sm + Style.space(2)
+                    blocks: parent.isUser ? [] : Logic.parseAnswerBlocks(modelData.text)
                   }
                 }
               }
 
-              // High-contrast active loading banner (moves even with animations off)
+              // Sleek translucent shimmer loading card (animates even with reduced motion)
               Rectangle {
                 id: loadingBanner
                 visible: root.streaming && root.streamingText.length === 0
                 width: answerColumn.width
                 radius: Math.min(4, root.cornerRadius)
-                color: Util.alpha(root.accentColor, 0.24)
-                border.width: 2
-                border.color: root.accentColor
+                color: Util.alpha(root.accentColor, 0.09)
+                border.width: 1
+                border.color: Util.alpha(root.accentColor, 0.38)
                 clip: true
-                implicitHeight: loadingRow.implicitHeight + Style.spacing.md * 2 + Style.space(4)
+                implicitHeight: loadingRow.implicitHeight + Style.spacing.md * 2 + Style.space(2)
 
-                // Solid accent left bar for instant visual pop
+                // 3 px leading accent hairline
                 Rectangle {
                   anchors.left: parent.left
                   anchors.top: parent.top
                   anchors.bottom: parent.bottom
-                  width: Style.space(5)
+                  width: Style.space(3)
                   color: root.accentColor
                 }
 
@@ -1246,128 +1795,122 @@ Item {
                   anchors.left: parent.left
                   anchors.right: parent.right
                   anchors.top: parent.top
-                  anchors.leftMargin: Style.spacing.md + Style.space(6)
+                  anchors.leftMargin: Style.spacing.md + Style.space(4)
                   anchors.rightMargin: Style.spacing.md
                   anchors.topMargin: Style.spacing.md
-                  implicitHeight: Math.max(spinnerPill.implicitHeight, loadingTitle.implicitHeight)
+                  implicitHeight: Math.max(spinnerGlyph.implicitHeight, loadingTitle.implicitHeight, elapsedLabel.implicitHeight)
 
-                  // High-contrast inverted accent pill with live spinner
-                  Rectangle {
-                    id: spinnerPill
+                  PlainText {
+                    id: spinnerGlyph
                     anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
-                    radius: Math.min(4, root.cornerRadius)
+                    text: root.spinnerFrames[root.loadingTick % root.spinnerFrames.length]
                     color: root.accentColor
-                    implicitWidth: spinnerGlyph.implicitWidth + Style.space(14)
-                    implicitHeight: spinnerGlyph.implicitHeight + Style.space(6)
-
-                    PlainText {
-                      id: spinnerGlyph
-                      anchors.centerIn: parent
-                      text: root.spinnerFrames[root.loadingTick % root.spinnerFrames.length]
-                      color: root.bgColor
-                      font.family: root.uiFont
-                      font.pixelSize: Style.font.body
-                      font.bold: true
-                    }
+                    font.family: root.uiFont
+                    font.pixelSize: Style.font.subtitle
+                    font.bold: true
                   }
 
                   PlainText {
                     id: loadingTitle
-                    anchors.left: spinnerPill.right
+                    anchors.left: spinnerGlyph.right
                     anchors.leftMargin: Style.spacing.sm
-                    anchors.right: elapsedBadge.left
+                    anchors.right: elapsedLabel.left
                     anchors.rightMargin: Style.spacing.sm
                     anchors.verticalCenter: parent.verticalCenter
                     text: strings.t("status.analyzing")
                     color: root.fgColor
                     font.family: root.uiFont
                     font.pixelSize: Style.font.body
-                    font.bold: true
                     elide: Text.ElideRight
                   }
 
-                  Rectangle {
-                    id: elapsedBadge
+                  PlainText {
+                    id: elapsedLabel
                     anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    radius: Math.min(4, root.cornerRadius)
-                    color: Util.alpha(root.bgColor, 0.72)
-                    border.width: 1
-                    border.color: Util.alpha(root.accentColor, 0.65)
-                    implicitWidth: elapsedLabel.implicitWidth + Style.space(12)
-                    implicitHeight: elapsedLabel.implicitHeight + Style.space(4)
-
-                    PlainText {
-                      id: elapsedLabel
-                      anchors.centerIn: parent
-                      text: Commons.I18n.formatNumber(root.loadingElapsedSec, 1) + "s"
-                      color: root.accentColor
-                      font.family: root.uiFont
-                      font.pixelSize: Style.font.caption
-                      font.bold: true
-                    }
+                    text: Commons.I18n.formatNumber(root.loadingElapsedSec, 1) + "s"
+                    color: root.accentColor
+                    font.family: root.uiFont
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
                   }
                 }
 
-                // Sweeping accent activity bar along the bottom edge
+                // Sweeping 2 px luminous activity hairline along the bottom edge
                 Rectangle {
                   anchors.left: parent.left
                   anchors.right: parent.right
                   anchors.bottom: parent.bottom
-                  height: Style.space(3)
-                  color: Util.alpha(root.accentColor, 0.22)
+                  height: 2
+                  color: Util.alpha(root.accentColor, 0.16)
 
                   Rectangle {
                     readonly property real trackWidth: parent.width
-                    readonly property real barWidth: Math.max(Style.space(48), trackWidth * 0.28)
-                    readonly property real phase: ((root.loadingTick * 0.06) % 1.0)
+                    readonly property real barWidth: Math.max(Style.space(56), trackWidth * 0.26)
+                    readonly property real phase: ((root.loadingTick * 0.055) % 1.0)
                     x: -barWidth + phase * (trackWidth + barWidth)
                     width: barWidth
                     height: parent.height
-                    color: root.accentColor
+                    gradient: Gradient {
+                      orientation: Gradient.Horizontal
+                      GradientStop { position: 0.0; color: "transparent" }
+                      GradientStop { position: 0.5; color: root.accentColor }
+                      GradientStop { position: 1.0; color: "transparent" }
+                    }
                   }
                 }
               }
 
-              // Active streaming chunk
+              // Active streaming reply (structured live with PlainText-safe blocks)
               Rectangle {
                 visible: root.streaming && root.streamingText.length > 0
                 width: answerColumn.width
                 radius: Math.min(4, root.cornerRadius)
-                color: Util.alpha(root.fgColor, 0.05)
-                implicitHeight: streamText.implicitHeight + Style.spacing.sm * 2
+                color: Util.alpha(root.fgColor, 0.035)
+                border.width: 1
+                border.color: Util.alpha(root.accentColor, 0.28)
+                implicitHeight: streamBlocks.implicitHeight + Style.spacing.sm * 2 + Style.space(4)
 
-                PlainText {
-                  id: streamText
+                AnswerBlocks {
+                  id: streamBlocks
                   anchors.left: parent.left
                   anchors.right: parent.right
                   anchors.top: parent.top
-                  anchors.margins: Style.spacing.sm
-                  text: root.streamingText
-                  color: root.fgColor
-                  font.family: root.uiFont
-                  font.pixelSize: Style.font.body
-                  wrapMode: Text.Wrap
+                  anchors.leftMargin: Style.spacing.md
+                  anchors.rightMargin: Style.spacing.md
+                  anchors.topMargin: Style.spacing.sm + Style.space(2)
+                  blocks: root.streamingText.length > 0 ? Logic.parseAnswerBlocks(root.streamingText) : []
                 }
               }
 
-              // Inline error box
+              // Inline error box with 3 px urgent leading bar
               Rectangle {
                 visible: root.errorMessage.length > 0
                 width: answerColumn.width
                 radius: Math.min(4, root.cornerRadius)
-                color: Util.alpha(root.urgentColor, 0.18)
+                color: Util.alpha(root.urgentColor, 0.14)
                 border.width: 1
-                border.color: Util.alpha(root.urgentColor, 0.6)
-                implicitHeight: errText.implicitHeight + Style.spacing.sm * 2
+                border.color: Util.alpha(root.urgentColor, 0.52)
+                clip: true
+                implicitHeight: errText.implicitHeight + Style.spacing.sm * 2 + Style.space(2)
+
+                Rectangle {
+                  anchors.left: parent.left
+                  anchors.top: parent.top
+                  anchors.bottom: parent.bottom
+                  width: Style.space(3)
+                  color: root.urgentColor
+                }
 
                 PlainText {
                   id: errText
                   anchors.left: parent.left
                   anchors.right: parent.right
                   anchors.top: parent.top
-                  anchors.margins: Style.spacing.sm
+                  anchors.leftMargin: Style.spacing.md + Style.space(3)
+                  anchors.rightMargin: Style.spacing.md
+                  anchors.topMargin: Style.spacing.sm + Style.space(1)
                   text: root.errorMessage
                   color: root.fgColor
                   font.family: root.uiFont
@@ -1380,49 +1923,64 @@ Item {
         }
       }
 
-      // Quick-action chips row
+      // Quick-action chips row with subtle keycap badges
       Row {
         anchors.horizontalCenter: parent.horizontalCenter
         spacing: Style.spacing.xs
 
-        Ui.Button {
-          foreground: root.fgColor
-          text: strings.t("chip.explain")
-          iconText: "󰋗"
-          background: root.bgColor
-          bordered: true
-          fontSize: Style.font.bodySmall
-          onClicked: root.runQuickChip("explain")
-        }
+        Repeater {
+          model: [
+            { kind: "explain",   icon: "󰋗", label: strings.t("chip.explain"),     key: "Alt+1" },
+            { kind: "summarize", icon: "󰦨", label: strings.t("chip.summarize"),   key: "Alt+2" },
+            { kind: "translate", icon: "󰗊", label: strings.t("chip.translate"),   key: "Alt+3" },
+            { kind: "extract",   icon: "󰗧", label: strings.t("chip.extractText"), key: "Alt+4" }
+          ]
+          delegate: Rectangle {
+            id: chipRect
+            required property var modelData
+            radius: Math.min(4, root.cornerRadius)
+            color: chipHover.hovered ? root.bgColor : Util.alpha(root.bgColor, 0.92)
+            border.width: 1
+            border.color: chipHover.hovered ? Util.alpha(root.accentColor, 0.72) : root.hairlineColor
+            implicitWidth: chipRow.implicitWidth + Style.space(18)
+            implicitHeight: Style.space(28)
 
-        Ui.Button {
-          foreground: root.fgColor
-          text: strings.t("chip.summarize")
-          iconText: "󰦨"
-          background: root.bgColor
-          bordered: true
-          fontSize: Style.font.bodySmall
-          onClicked: root.runQuickChip("summarize")
-        }
+            FloatingShadow { anchors.fill: parent; radius: chipRect.radius }
 
-        Ui.Button {
-          foreground: root.fgColor
-          text: strings.t("chip.translate")
-          iconText: "󰗊"
-          background: root.bgColor
-          bordered: true
-          fontSize: Style.font.bodySmall
-          onClicked: root.runQuickChip("translate")
-        }
+            Row {
+              id: chipRow
+              anchors.centerIn: parent
+              spacing: Style.space(6)
 
-        Ui.Button {
-          foreground: root.fgColor
-          text: strings.t("chip.extractText")
-          iconText: "󰗧"
-          background: root.bgColor
-          bordered: true
-          fontSize: Style.font.bodySmall
-          onClicked: root.runQuickChip("extract")
+              PlainText {
+                anchors.verticalCenter: parent.verticalCenter
+                text: modelData.icon
+                color: chipHover.hovered ? root.accentColor : Util.alpha(root.fgColor, 0.72)
+                font.family: root.uiFont
+                font.pixelSize: Style.font.body
+              }
+
+              PlainText {
+                anchors.verticalCenter: parent.verticalCenter
+                text: modelData.label
+                color: root.fgColor
+                font.family: root.uiFont
+                font.pixelSize: Style.font.bodySmall
+              }
+
+              KeyCap {
+                anchors.verticalCenter: parent.verticalCenter
+                label: modelData.key
+              }
+            }
+
+            HoverHandler { id: chipHover; cursorShape: Qt.PointingHandCursor }
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.runQuickChip(modelData.kind)
+            }
+          }
         }
       }
 
@@ -1433,9 +1991,10 @@ Item {
         color: root.bgColor
         borderSpec: root.cardBorderSpec
         radius: root.cornerRadius
-        padding: Style.spacing.sm
+        padding: Style.spacing.md
         implicitHeight: promptColumn.implicitHeight + padding * 2 + Border.top(borderSpec) + Border.bottom(borderSpec)
 
+        FloatingShadow { anchors.fill: parent; radius: promptBar.radius }
         MouseArea { anchors.fill: parent; onClicked: {} }
 
         Column {
@@ -1447,38 +2006,130 @@ Item {
           anchors.leftMargin: promptBar.contentLeftInset
           spacing: Style.spacing.xs
 
-          // Context & voice status strip
-          Row {
+          // Context badge & live voice status strip
+          Item {
             width: parent.width
-            spacing: Style.spacing.xs
+            implicitHeight: Math.max(ctxBadge.implicitHeight, voiceStrip.implicitHeight)
 
             Rectangle {
+              id: ctxBadge
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
               radius: Math.min(4, root.cornerRadius)
-              color: Util.alpha(root.accentColor, 0.16)
-              height: ctxLabel.implicitHeight + Style.space(6)
-              width: ctxLabel.implicitWidth + Style.space(14)
+              color: Util.alpha(root.accentColor, 0.14)
+              border.width: 1
+              border.color: Util.alpha(root.accentColor, 0.34)
+              implicitHeight: ctxRow.implicitHeight + Style.space(5)
+              implicitWidth: ctxRow.implicitWidth + Style.space(14)
+
+              Row {
+                id: ctxRow
+                anchors.centerIn: parent
+                spacing: Style.space(6)
+
+                Rectangle {
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: Style.space(5)
+                  height: Style.space(5)
+                  radius: width / 2
+                  color: root.accentColor
+                }
+
+                PlainText {
+                  id: ctxLabel
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.contextBadgeText()
+                  color: root.accentColor
+                  font.family: root.uiFont
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                }
+              }
+            }
+
+            // Live voice recording waveform & status
+            Row {
+              id: voiceStrip
+              visible: root.voiceState !== "idle"
+              anchors.left: ctxBadge.right
+              anchors.leftMargin: Style.spacing.sm
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(6)
+
+              Row {
+                visible: root.voiceState === "recording"
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(2)
+                height: Style.space(12)
+
+                Repeater {
+                  model: 4
+                  delegate: Rectangle {
+                    required property int index
+                    readonly property real wave: 0.35 + 0.65 * Math.abs(Math.sin((root.voiceTick * 0.55) + index * 1.1))
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 2
+                    height: Math.max(3, Math.round(Style.space(12) * wave))
+                    radius: 1
+                    color: root.urgentColor
+                  }
+                }
+              }
 
               PlainText {
-                id: ctxLabel
-                anchors.centerIn: parent
-                text: root.contextBadgeText()
-                color: root.accentColor
+                anchors.verticalCenter: parent.verticalCenter
+                text: root.voiceState === "recording"
+                  ? strings.t("voice.listening")
+                  : strings.t("voice.transcribing")
+                color: root.voiceState === "recording" ? root.urgentColor : root.accentColor
                 font.family: root.uiFont
                 font.pixelSize: Style.font.caption
                 font.bold: true
               }
             }
 
-            PlainText {
-              visible: root.voiceState !== "idle"
+            // Quiet keyboard hints aligned right
+            Row {
+              anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
-              text: root.voiceState === "recording"
-                ? strings.t("voice.listening")
-                : strings.t("voice.transcribing")
-              color: root.voiceState === "recording" ? root.urgentColor : root.accentColor
-              font.family: root.uiFont
-              font.pixelSize: Style.font.caption
-              font.bold: true
+              spacing: Style.space(8)
+              opacity: 0.72
+
+              Row {
+                spacing: Style.space(4)
+                KeyCap { anchors.verticalCenter: parent.verticalCenter; label: "Tab" }
+                PlainText {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Mode"
+                  color: root.mutedInk
+                  font.family: root.uiFont
+                  font.pixelSize: Style.font.caption
+                }
+              }
+
+              Row {
+                spacing: Style.space(4)
+                KeyCap { anchors.verticalCenter: parent.verticalCenter; label: "Ctrl+M" }
+                PlainText {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Voice"
+                  color: root.mutedInk
+                  font.family: root.uiFont
+                  font.pixelSize: Style.font.caption
+                }
+              }
+
+              Row {
+                spacing: Style.space(4)
+                KeyCap { anchors.verticalCenter: parent.verticalCenter; label: "Esc" }
+                PlainText {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Close"
+                  color: root.mutedInk
+                  font.family: root.uiFont
+                  font.pixelSize: Style.font.caption
+                }
+              }
             }
           }
 
