@@ -225,13 +225,17 @@ def mask_secret(value: str) -> str:
     return f"••••{s[-4:]}"
 
 
-def redact_config(cfg: dict) -> dict:
+def redact_config(cfg: dict, env: dict | None = None) -> dict:
+    env_map = os.environ if env is None else env
     out = copy.deepcopy(cfg)
     for prov_id, prov in out.get("providers", {}).items():
         if isinstance(prov, dict) and "apiKey" in prov:
             raw = str(prov.get("apiKey") or "")
+            env_vars = PROVIDER_CATALOG.get(prov_id, {}).get("envVars", [])
+            env_key = next((str(env_map.get(v) or "").strip() for v in env_vars if str(env_map.get(v) or "").strip()), "")
             prov["hasKey"] = bool(raw.strip())
-            prov["maskedKey"] = mask_secret(raw)
+            prov["hasEnvKey"] = bool(env_key)
+            prov["maskedKey"] = mask_secret(raw) if raw.strip() else mask_secret(env_key)
             prov["apiKey"] = ""
     return out
 
@@ -398,7 +402,7 @@ def main() -> int:
             return 0
 
         if args.cmd == "patch":
-            raw = args.json_patch if args.json_patch else sys.stdin.read()
+            raw = args.json_patch if args.json_patch else sys.stdin.readline()
             patch_obj = json.loads(raw)
             if not isinstance(patch_obj, dict):
                 raise ValueError("patch must be a JSON object")

@@ -100,7 +100,7 @@ def resolve_provider(config: dict, env: dict | None = None, task: str = "") -> d
         host = validate_ollama_host(ollama_host or configured_ollama_host)
         return {"provider": "ollama", "model": explicit_model or str(ollama_cfg.get("model") or DEFAULT_MODELS["ollama"]), "host": host}
     if preferred == "agent":
-        return {"provider": "agent", "model": explicit_model or str(agent_cfg.get("model") or "")}
+        return {"provider": "agent", "model": explicit_model or str(agent_cfg.get("model") or ""), "cli": str(agent_cfg.get("cli") or "default")}
 
     # Auto-detection order: fastest direct Vision APIs first, then Ollama, then Omarchy default agent.
     if gemini_key:
@@ -111,7 +111,7 @@ def resolve_provider(config: dict, env: dict | None = None, task: str = "") -> d
         return {"provider": "openai", "model": explicit_model or str(openai_cfg.get("model") or DEFAULT_MODELS["openai"]), "apiKey": openai_key}
     if ollama_host:
         return {"provider": "ollama", "model": explicit_model or str(ollama_cfg.get("model") or DEFAULT_MODELS["ollama"]), "host": validate_ollama_host(ollama_host)}
-    return {"provider": "agent", "model": explicit_model or str(agent_cfg.get("model") or "")}
+    return {"provider": "agent", "model": explicit_model or str(agent_cfg.get("model") or ""), "cli": str(agent_cfg.get("cli") or "default")}
 
 
 def prepare_image(image_path: str, crop: dict | None, max_dim: int = 1920) -> tuple[bytes, str, str]:
@@ -445,8 +445,8 @@ def parse_claude_stream_json_line(line: str) -> tuple[str, str]:
     return "", ""
 
 
-def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict], model: str = "") -> None:
-    agent = detect_default_agent()
+def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict], model: str = "", cli: str = "default") -> None:
+    agent = cli if (cli and cli != "default") else detect_default_agent()
     if not agent:
         emit(
             {
@@ -571,7 +571,7 @@ def main() -> int:
         model = resolved["model"]
 
         if provider == "agent":
-            run_agent_fallback(user_text, saved_path, history, model=model)
+            run_agent_fallback(user_text, saved_path, history, model=model, cli=str(resolved.get("cli") or "default"))
             return 0
 
         if provider == "gemini":
