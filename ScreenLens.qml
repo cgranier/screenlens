@@ -553,12 +553,12 @@ Item {
       onStreamFinished: {
         var res = null
         try { res = JSON.parse(text) } catch (e) { res = null }
-        root.dismiss()
         if (res && res.ok && res.prompt) {
           // Match Omarchy's first-party agents panel: detach via login shell so
           // uwsm-app / xdg-terminal-exec / foot inherit the full desktop session.
           Util.execArgv(["omarchy-agent-prompt", res.prompt])
         }
+        root.dismiss()
       }
     }
   }
@@ -616,16 +616,9 @@ Item {
     onWidthChanged: if (root.rawOcrWords.length > 0) root.remapOcrWords()
     onHeightChanged: if (root.rawOcrWords.length > 0) root.remapOcrWords()
 
-    // Pure Qt Quick translucent scrims over the transparent OverlayWindow — no
-    // fullscreen Image or Canvas FBO that can render black across Wayland
-    // layer-shell unmap/remap cycles.
-    Rectangle {
-      anchors.fill: parent
-      visible: !root.selectionRect
-      color: Qt.rgba(0, 0, 0, 0.16)
-    }
-
     // Four dim strips framing the selected region so the cutout stays crystal-clear.
+    // Leaving the unselected surface un-tinted keeps the live screen crisp and
+    // avoids fullscreen opaque-region quirks on Wayland layer-shell surfaces.
     Item {
       anchors.fill: parent
       visible: !!root.selectionRect

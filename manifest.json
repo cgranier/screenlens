@@ -9,7 +9,7 @@
   "kinds": [
     "overlay"
   ],
-  "keepLoaded": true,
+  "keepLoaded": false,
   "entryPoints": {
     "overlay": "ScreenLens.qml"
   }
