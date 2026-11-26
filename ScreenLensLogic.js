@@ -183,6 +183,41 @@ function formatSelectedWords(words, indices) {
   return { indices: indices, text: text, bounds: bounds }
 }
 
+// Resolves the active surface palette for "system" | "dark" | "light" theme
+// overrides while always preserving the live Omarchy accent and urgent colors.
+function resolveThemePalette(themeMode, systemPalette) {
+  var sys = systemPalette || ({})
+  var mode = String(themeMode || "system").toLowerCase()
+  if (mode === "dark") {
+    return {
+      background: "#181a22",
+      text: "#e6e9f2",
+      border: "#353b4d",
+      scrim: "#7a000000",
+      accent: sys.accent || "#7aa2f7",
+      urgent: sys.urgent || "#f7768e"
+    }
+  }
+  if (mode === "light") {
+    return {
+      background: "#f5f6fa",
+      text: "#1b1f2a",
+      border: "#c7cddb",
+      scrim: "#520f1420",
+      accent: sys.accent || "#7aa2f7",
+      urgent: sys.urgent || "#d6455d"
+    }
+  }
+  return {
+    background: sys.background || "#101315",
+    text: sys.text || "#cacccc",
+    border: sys.border || "#cacccc",
+    scrim: sys.scrim || "#70101315",
+    accent: sys.accent || "#7aa2f7",
+    urgent: sys.urgent || "#a55555"
+  }
+}
+
 // Builds a clear, structured prompt for handing the session off to
 // `omarchy agent prompt` so the user's coding agent has full visual & text context.
 function buildAgentHandoffPrompt(opts) {

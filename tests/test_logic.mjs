@@ -82,4 +82,13 @@ assert.match(handoff, /\/tmp\/shot\.png/)
 assert.match(handoff, /error: missing semicolon/)
 assert.match(handoff, /Fix it in main\.cpp/)
 
+// 6. Theme mode palette resolution preserves live Omarchy accent
+const sysPal = { background: "#111111", text: "#eeeeee", border: "#444444", scrim: "#70111111", accent: "#ff9900", urgent: "#ff2222" }
+assert.equal(sandbox.resolveThemePalette("system", sysPal).background, "#111111")
+assert.equal(sandbox.resolveThemePalette("dark", sysPal).accent, "#ff9900")
+assert.equal(sandbox.resolveThemePalette("dark", sysPal).background, "#181a22")
+assert.equal(sandbox.resolveThemePalette("light", sysPal).accent, "#ff9900")
+assert.equal(sandbox.resolveThemePalette("light", sysPal).background, "#f5f6fa")
+assert.equal(sandbox.resolveThemePalette("invalid", sysPal).background, "#111111")
+
 console.log("test_logic.mjs: ALL PASSED")

@@ -65,14 +65,29 @@ Item {
   property string pendingCopyJson: ""
   property string pendingHandoffJson: ""
 
-  // Surface tokens aligned with Omarchy's menu & popup surfaces
-  readonly property color bgColor: Commons.Color.menu.background
-  readonly property color fgColor: Commons.Color.menu.text
-  readonly property color accentColor: Commons.Color.accent
-  readonly property color urgentColor: Commons.Color.urgent
-  readonly property color borderColor: Commons.Color.menu.border
-  readonly property color scrimColor: Commons.Color.menu.scrim
-  readonly property var cardBorderSpec: Border.surfaceSpec("menu", "border", borderColor, Math.max(1, Style.space(2)))
+  // User config loaded from 0600 ~/.config/omarchy/screenlens.json on open
+  property var userConfig: ({})
+  property string themeMode: "system"
+
+  // Surface tokens aligned with Omarchy's menu & popup surfaces, with optional
+  // Dark / Light surface override while preserving the live Omarchy accent.
+  readonly property var resolvedPalette: Logic.resolveThemePalette(root.themeMode, {
+    background: Commons.Color.menu.background,
+    text: Commons.Color.menu.text,
+    border: Commons.Color.menu.border,
+    scrim: Commons.Color.menu.scrim,
+    accent: Commons.Color.accent,
+    urgent: Commons.Color.urgent
+  })
+  readonly property color bgColor: resolvedPalette.background
+  readonly property color fgColor: resolvedPalette.text
+  readonly property color accentColor: resolvedPalette.accent
+  readonly property color urgentColor: resolvedPalette.urgent
+  readonly property color borderColor: resolvedPalette.border
+  readonly property color scrimColor: resolvedPalette.scrim
+  readonly property var cardBorderSpec: root.themeMode === "system"
+    ? Border.surfaceSpec("menu", "border", borderColor, Math.max(1, Style.space(2)))
+    : Border.flat(borderColor, Math.max(1, Style.space(2)))
   readonly property int cornerRadius: Style.cornerRadius
   readonly property string uiFont: Style.font.menuFamily
 
@@ -92,6 +107,8 @@ Item {
 
     root.resetSession()
     root.capturing = true
+    loadCfgProc.running = false
+    loadCfgProc.running = true
     captureProc.running = false
     captureProc.running = true
   }
@@ -478,6 +495,26 @@ Item {
   }
 
   Process {
+    id: loadCfgProc
+    command: ["/usr/bin/python3", root.pluginDir + "/scripts/config.py", "get", "--redact"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var res = null
+        try { res = JSON.parse(text) } catch (e) { res = null }
+        if (res && res.ok && res.config) {
+          root.userConfig = res.config
+          root.themeMode = String(res.config.theme || "system")
+          var defMode = String(res.config.defaultMode || "lasso")
+          if ((defMode === "lasso" || defMode === "text") && !root.selectionRect && !root.selectedText) {
+            root.mode = defMode
+          }
+        }
+      }
+    }
+  }
+
+  Process {
     id: captureProc
     command: ["/usr/bin/python3", root.pluginDir + "/scripts/capture.py"]
     stdout: StdioCollector {
@@ -826,6 +863,7 @@ Item {
         spacing: Style.spacing.xs
 
         Ui.Button {
+          foreground: root.fgColor
           visible: root.selectedText.length > 0
           text: strings.t("action.copyText")
           iconText: "󰆏"
@@ -833,6 +871,7 @@ Item {
         }
 
         Ui.Button {
+          foreground: root.fgColor
           visible: !!root.selectionRect
           text: strings.t("chip.extractText")
           iconText: "󰗧"
@@ -840,6 +879,7 @@ Item {
         }
 
         Ui.Button {
+          foreground: root.fgColor
           visible: !!root.selectionRect
           text: strings.t("action.copy")
           iconText: "󰋩"
@@ -847,6 +887,7 @@ Item {
         }
 
         Ui.Button {
+          foreground: root.fgColor
           text: strings.t("action.askSelection")
           iconText: "󰚩"
           selected: true
@@ -854,12 +895,14 @@ Item {
         }
 
         Ui.Button {
+          foreground: root.fgColor
           text: strings.t("action.handoff")
           iconText: "󰆍"
           onClicked: root.handoffToAgent()
         }
 
         Ui.Button {
+          foreground: root.fgColor
           iconText: "󰅖"
           tooltipText: strings.t("context.clear")
           onClicked: root.clearSelection()
@@ -894,6 +937,7 @@ Item {
         spacing: Style.spacing.xs
 
         Ui.Button {
+          foreground: root.fgColor
           text: strings.t("mode.lasso")
           iconText: "󰒅"
           selected: root.mode === "lasso"
@@ -904,6 +948,7 @@ Item {
         }
 
         Ui.Button {
+          foreground: root.fgColor
           text: strings.t("mode.text")
           iconText: "󰗧"
           iconSpinning: root.ocrLoading
@@ -915,6 +960,7 @@ Item {
         }
 
         Ui.Button {
+          foreground: root.fgColor
           text: strings.t("mode.fullScreen")
           iconText: "󰊓"
           visible: !!root.selectionRect || root.selectedText.length > 0
@@ -945,12 +991,14 @@ Item {
         }
 
         Ui.Button {
+          foreground: root.fgColor
           iconText: "󰒓"
           tooltipText: strings.t("settings.openTooltip")
           onClicked: root.openSettings()
         }
 
         Ui.Button {
+          foreground: root.fgColor
           iconText: "󰅖"
           tooltipText: strings.t("action.close")
           onClicked: root.dismiss()
@@ -1066,6 +1114,7 @@ Item {
               spacing: Style.spacing.xs
 
               Ui.Button {
+                foreground: root.fgColor
                 visible: root.latestAssistantText().length > 0
                 text: strings.t("action.copy")
                 iconText: "󰆏"
@@ -1074,6 +1123,7 @@ Item {
               }
 
               Ui.Button {
+                foreground: root.fgColor
                 text: strings.t("action.handoff")
                 iconText: "󰆍"
                 fontSize: Style.font.bodySmall
@@ -1082,6 +1132,7 @@ Item {
               }
 
               Ui.Button {
+                foreground: root.fgColor
                 text: strings.t("action.newChat")
                 iconText: "󰃢"
                 fontSize: Style.font.bodySmall
@@ -1303,6 +1354,7 @@ Item {
         spacing: Style.spacing.xs
 
         Ui.Button {
+          foreground: root.fgColor
           text: strings.t("chip.explain")
           iconText: "󰋗"
           background: root.bgColor
@@ -1312,6 +1364,7 @@ Item {
         }
 
         Ui.Button {
+          foreground: root.fgColor
           text: strings.t("chip.summarize")
           iconText: "󰦨"
           background: root.bgColor
@@ -1321,6 +1374,7 @@ Item {
         }
 
         Ui.Button {
+          foreground: root.fgColor
           text: strings.t("chip.translate")
           iconText: "󰗊"
           background: root.bgColor
@@ -1330,6 +1384,7 @@ Item {
         }
 
         Ui.Button {
+          foreground: root.fgColor
           text: strings.t("chip.extractText")
           iconText: "󰗧"
           background: root.bgColor
@@ -1451,6 +1506,7 @@ Item {
             }
 
             Ui.Button {
+              foreground: root.fgColor
               id: sendBtn
               anchors.verticalCenter: parent.verticalCenter
               text: root.streaming ? strings.t("prompt.stop") : strings.t("prompt.send")
@@ -1465,6 +1521,7 @@ Item {
             }
 
             Ui.Button {
+              foreground: root.fgColor
               id: handoffBtn
               anchors.verticalCenter: parent.verticalCenter
               iconText: "󰆍"

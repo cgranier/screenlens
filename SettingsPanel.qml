@@ -4,6 +4,7 @@ import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui as Ui
+import "ScreenLensLogic.js" as Logic
 
 // Reel-inspired tabbed Settings panel for ScreenLens.
 // Left-clicking the bar icon opens Settings; right-clicking launches the
@@ -16,11 +17,20 @@ Ui.Panel {
   manageIpc: false
 
   readonly property string pluginDir: String(Qt.resolvedUrl(".")).replace(/^file:\/\//, "").replace(/\/$/, "")
-  readonly property color bgColor: Commons.Color.popups.background
-  readonly property color fgColor: Commons.Color.popups.text
-  readonly property color accentColor: Commons.Color.accent
-  readonly property color urgentColor: Commons.Color.urgent
-  readonly property color borderColor: Commons.Color.popups.border
+  readonly property string themeMode: String(root.cfgVal("theme", "system"))
+  readonly property var resolvedPalette: Logic.resolveThemePalette(root.themeMode, {
+    background: Commons.Color.popups.background,
+    text: Commons.Color.popups.text,
+    border: Commons.Color.popups.border,
+    scrim: Commons.Color.menu.scrim,
+    accent: Commons.Color.accent,
+    urgent: Commons.Color.urgent
+  })
+  readonly property color bgColor: resolvedPalette.background
+  readonly property color fgColor: resolvedPalette.text
+  readonly property color accentColor: resolvedPalette.accent
+  readonly property color urgentColor: resolvedPalette.urgent
+  readonly property color borderColor: resolvedPalette.border
   readonly property int cornerRadius: Style.cornerRadius
   readonly property string uiFont: Style.font.family
 
@@ -472,6 +482,18 @@ Ui.Panel {
       anchors.fill: parent
       focus: true
 
+      // Surface backdrop when Dark or Light override is chosen (System uses
+      // KeyboardPanel's native themed background).
+      Rectangle {
+        anchors.fill: parent
+        anchors.margins: -Style.spacing.popupPadding
+        visible: root.themeMode !== "system"
+        color: root.bgColor
+        radius: root.cornerRadius
+        border.width: 1
+        border.color: root.borderColor
+      }
+
       Keys.onPressed: function(event) {
         if (event.key === Qt.Key_Escape) {
           root.close()
@@ -527,6 +549,7 @@ Ui.Panel {
             spacing: Style.spacing.xs
 
             Ui.Button {
+              foreground: root.fgColor
               text: strings.t("settings.captureNow")
               iconText: "󰒅"
               fontSize: Style.font.bodySmall
@@ -535,6 +558,7 @@ Ui.Panel {
             }
 
             Ui.Button {
+              foreground: root.fgColor
               iconText: "󰅖"
               tooltipText: strings.t("action.close")
               onClicked: root.close()
@@ -548,6 +572,7 @@ Ui.Panel {
           spacing: Style.spacing.xs
 
           Ui.Button {
+            foreground: root.fgColor
             text: strings.t("settings.tab.general")
             iconText: "󰒓"
             fontSize: Style.font.bodySmall
@@ -557,6 +582,7 @@ Ui.Panel {
           }
 
           Ui.Button {
+            foreground: root.fgColor
             text: strings.t("settings.tab.providers")
             iconText: "󰚩"
             fontSize: Style.font.bodySmall
@@ -566,6 +592,7 @@ Ui.Panel {
           }
 
           Ui.Button {
+            foreground: root.fgColor
             text: strings.t("settings.tab.tasks")
             iconText: "󰒋"
             fontSize: Style.font.bodySmall
@@ -575,6 +602,7 @@ Ui.Panel {
           }
 
           Ui.Button {
+            foreground: root.fgColor
             text: strings.t("settings.tab.language")
             iconText: "󰗊"
             fontSize: Style.font.bodySmall
@@ -619,6 +647,7 @@ Ui.Panel {
             }
 
             Ui.Button {
+              foreground: root.fgColor
               id: applyKbBtn
               anchors.verticalCenter: parent.verticalCenter
               text: strings.t("settings.apply")
@@ -671,6 +700,7 @@ Ui.Panel {
                 { id: "light", label: strings.t("settings.theme.light") }
               ]
               delegate: Ui.Button {
+                foreground: root.fgColor
                 text: modelData.label
                 fontSize: Style.font.bodySmall
                 bordered: true
@@ -689,6 +719,7 @@ Ui.Panel {
             spacing: Style.spacing.xs
 
             Ui.Button {
+              foreground: root.fgColor
               text: strings.t("mode.lasso")
               iconText: "󰒅"
               fontSize: Style.font.bodySmall
@@ -698,6 +729,7 @@ Ui.Panel {
             }
 
             Ui.Button {
+              foreground: root.fgColor
               text: strings.t("mode.text")
               iconText: "󰗧"
               fontSize: Style.font.bodySmall
@@ -721,6 +753,7 @@ Ui.Panel {
             Repeater {
               model: [1280, 1920, 2560, 3840]
               delegate: Ui.Button {
+                foreground: root.fgColor
                 text: String(modelData) + "px"
                 fontSize: Style.font.caption
                 bordered: true
@@ -756,6 +789,7 @@ Ui.Panel {
                 { id: "agent", label: "CLI Agent" }
               ]
               delegate: Ui.Button {
+                foreground: root.fgColor
                 text: modelData.label
                 fontSize: Style.font.bodySmall
                 bordered: true
@@ -784,6 +818,7 @@ Ui.Panel {
                 { id: "agent", label: "CLI Agent" }
               ]
               delegate: Ui.Button {
+                foreground: root.fgColor
                 text: modelData.label
                 fontSize: Style.font.caption
                 bordered: true
@@ -850,6 +885,7 @@ Ui.Panel {
                   spacing: Style.spacing.xs
 
                   Ui.Button {
+                    foreground: root.fgColor
                     visible: String(root.currentProviderMeta().keyUrl || "").length > 0
                     text: strings.t("settings.getApiKey")
                     fontSize: Style.font.caption
@@ -858,6 +894,7 @@ Ui.Panel {
                   }
 
                   Ui.Button {
+                    foreground: root.fgColor
                     text: root.testingProvider ? strings.t("settings.testing") : strings.t("settings.testConnection")
                     iconText: "󰙨"
                     iconSpinning: root.testingProvider
@@ -901,6 +938,7 @@ Ui.Panel {
                 }
 
                 Ui.Button {
+                  foreground: root.fgColor
                   id: refreshModelsBtn
                   anchors.bottom: parent.bottom
                   iconText: "󰑐"
@@ -935,6 +973,7 @@ Ui.Panel {
                 }
 
                 Ui.Button {
+                  foreground: root.fgColor
                   id: saveModelBtn
                   anchors.verticalCenter: parent.verticalCenter
                   text: strings.t("settings.save")
@@ -990,6 +1029,7 @@ Ui.Panel {
                   }
 
                   Ui.Button {
+                    foreground: root.fgColor
                     id: saveKeyBtn
                     anchors.verticalCenter: parent.verticalCenter
                     text: strings.t("settings.save")
@@ -1006,6 +1046,7 @@ Ui.Panel {
                   }
 
                   Ui.Button {
+                    foreground: root.fgColor
                     id: clearKeyBtn
                     visible: root.currentProviderCfg().hasKey === true
                     anchors.verticalCenter: parent.verticalCenter
@@ -1051,6 +1092,7 @@ Ui.Panel {
                   }
 
                   Ui.Button {
+                    foreground: root.fgColor
                     id: saveOllamaBtn
                     anchors.verticalCenter: parent.verticalCenter
                     text: strings.t("settings.save")
@@ -1084,6 +1126,7 @@ Ui.Panel {
                       ? root.currentProviderMeta().clis
                       : ["default", "claude", "codex", "agy", "opencode", "grok", "gemini"]
                     delegate: Ui.Button {
+                      foreground: root.fgColor
                       text: modelData
                       fontSize: Style.font.caption
                       bordered: true
@@ -1285,6 +1328,7 @@ Ui.Panel {
             Repeater {
               model: ["English", "Spanish", "French", "German", "Portuguese", "Japanese"]
               delegate: Ui.Button {
+                foreground: root.fgColor
                 text: modelData
                 fontSize: Style.font.bodySmall
                 bordered: true
