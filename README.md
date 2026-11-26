@@ -4,7 +4,7 @@ An Android "Circle to Search"-style on-screen AI overlay plugin for the Omarchy 
 
 ## Features
 
-- **Instant Frozen-Screen Overlay:** Summon over any window or workspace via hotkey (`Super + Shift + A` by default) to freeze the active monitor without flicker.
+- **Instant Frozen-Screen Overlay:** Summon over any window or workspace via hotkey (`Super + Alt + A` by default) to freeze the active monitor without flicker.
 - **Circle / Lasso & Region Crop:** Drag freely around anything on screen to crop and ask about that exact area.
 - **On-Screen Text Selection (OCR):** Runs Tesseract word-box OCR in the background as soon as the overlay opens; press `Tab` (or click **Select Text**) to highlight any visible text on screen, copy it (`Ctrl+C`), or ask AI about it.
 - **Quick-Action Chips:** One-click (`Alt+1..4`) **Explain**, **Summarize**, **Translate**, and **Extract Text**.
@@ -18,7 +18,7 @@ An Android "Circle to Search"-style on-screen AI overlay plugin for the Omarchy 
 
 | Shortcut | Action |
 |---|---|
-| `Super + Shift + A` | Toggle ScreenLens overlay (configurable in `~/.config/hypr/bindings.lua`) |
+| `Super + Alt + A` | Toggle ScreenLens overlay (configurable in `~/.config/hypr/bindings.lua`) |
 | `Tab` | Switch between **Circle / Region** and **Select Text** modes |
 | `Enter` | Send prompt / follow-up |
 | `Ctrl + M` | Toggle Superwhisper voice dictation |

@@ -8,19 +8,22 @@ TARGET_DIR="$HOME/.config/omarchy/plugins/$PLUGIN_ID"
 omarchy plugin validate "$ROOT_DIR"
 
 mkdir -p "$HOME/.config/omarchy/plugins"
+STAGE_DIR="$HOME/.config/omarchy/plugins/.stage.$PLUGIN_ID.$$"
+rm -rf "$STAGE_DIR"
+mkdir -p "$STAGE_DIR"
+
+cp "$ROOT_DIR/manifest.json" "$STAGE_DIR/"
+cp "$ROOT_DIR/ScreenLens.qml" "$STAGE_DIR/"
+cp "$ROOT_DIR/PlainText.qml" "$STAGE_DIR/"
+cp "$ROOT_DIR/ScreenLensLogic.js" "$STAGE_DIR/"
+cp -R "$ROOT_DIR/scripts" "$STAGE_DIR/"
+cp -R "$ROOT_DIR/i18n" "$STAGE_DIR/"
+chmod +x "$STAGE_DIR"/scripts/*.py
+
+omarchy plugin validate "$STAGE_DIR"
 rm -rf "$TARGET_DIR"
-mkdir -p "$TARGET_DIR"
-
-cp "$ROOT_DIR/manifest.json" "$TARGET_DIR/"
-cp "$ROOT_DIR/ScreenLens.qml" "$TARGET_DIR/"
-cp "$ROOT_DIR/PlainText.qml" "$TARGET_DIR/"
-cp "$ROOT_DIR/ScreenLensLogic.js" "$TARGET_DIR/"
-cp -R "$ROOT_DIR/scripts" "$TARGET_DIR/"
-cp -R "$ROOT_DIR/i18n" "$TARGET_DIR/"
-chmod +x "$TARGET_DIR"/scripts/*.py
-
-omarchy plugin validate "$TARGET_DIR"
-omarchy-shell shell rescanPlugins >/dev/null
+mv "$STAGE_DIR" "$TARGET_DIR"
+omarchy-shell shell rescanPlugins >/dev/null || true
 
 # Wait briefly for rescan before enabling
 for _ in $(seq 1 30); do
