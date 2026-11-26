@@ -2162,7 +2162,7 @@ Ui.Panel {
           PlainText {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
-            text: "v" + String((root.manifest && root.manifest.version) || "0.9.0")
+            text: "v" + String((root.manifest && root.manifest.version) || "0.9.1")
             color: Util.alpha(root.fgColor, 0.38)
             font.family: root.uiFont
             font.pixelSize: Style.font.caption

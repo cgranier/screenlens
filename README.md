@@ -6,6 +6,8 @@ Summon ScreenLens over any window or workspace, circle/drag a region or select o
 
 > **Public Beta (`v0.9.1`):** ScreenLens is in active beta for early Omarchy testers. Bug reports and ideas are very welcome in [Issues](https://github.com/cgranier/screenlens/issues).
 
+![ScreenLens Settings panel on Omarchy](docs/settings-hero.png)
+
 ## Features
 
 - **Instant On-Screen Overlay:** Summon via hotkey (`Super + Alt + A` by default) or right-click the bar icon (`󰍉`) without flicker.
@@ -22,6 +24,10 @@ Summon ScreenLens over any window or workspace, circle/drag a region or select o
   - **Providers:** Manage API keys (with direct links to provider key pages), discover live available models, select models, and run connection tests.
   - **Tasks:** Optional per-task provider/model routing (**General**, **Vision / Crop**, **Selected Text**, **Translate**) plus a dedicated **Continue in Agent** CLI selector.
   - **Language & OCR:** Pick your default translation language, toggle active Tesseract OCR packs, and install additional Arch `tesseract-data-*` packs directly from Settings.
+
+## Screenshots
+
+![ScreenLens Settings tabs — General, Providers, and Language & OCR](docs/settings-showcase.png)
 
 ## Requirements
 
