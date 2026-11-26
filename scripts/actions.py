@@ -126,6 +126,108 @@ def handoff_to_agent(request_file: str) -> int:
     return 0
 
 
+def build_context_markdown(
+    window_class: str,
+    window_title: str,
+    image_path: str,
+    crop: dict | None,
+    selected_text: str,
+    messages: list[dict],
+    draft_prompt: str,
+    crop_path: str = "",
+) -> str:
+    lines: list[str] = []
+    if crop_path:
+        lines.append(f"Cropped region image: {crop_path}")
+    lines.append("Context captured via ScreenLens:")
+    if window_class or window_title:
+        label = f"{window_class} — {window_title}" if window_class and window_title else (window_class or window_title)
+        lines.append(f"- Active window: {label}")
+    if image_path:
+        lines.append(f"- Screenshot file: {image_path}")
+    if isinstance(crop, dict) and int(crop.get("w", 0)) > 0 and int(crop.get("h", 0)) > 0:
+        lines.append(
+            f"- Selected region (image px): x={int(crop['x'])}, y={int(crop['y'])}, "
+            f"w={int(crop['w'])}, h={int(crop['h'])}"
+        )
+    if selected_text:
+        lines.extend(["", "Selected on-screen text:", '"""', selected_text[:4000], '"""'])
+    if messages:
+        lines.extend(["", "Prior ScreenLens conversation:"])
+        for msg in messages[-8:]:
+            if not isinstance(msg, dict) or not msg.get("text"):
+                continue
+            role = "User" if msg.get("role") == "user" else "Assistant"
+            lines.append(f"{role}: {str(msg['text'])[:2000]}")
+    if draft_prompt.strip():
+        lines.extend(["", f"Follow-up request: {draft_prompt.strip()}"])
+    else:
+        lines.extend(["", "Continue helping me with what is shown above. Inspect the screenshot file if helpful."])
+    return "\n".join(lines)
+
+
+def notify_error(message: str) -> None:
+    notifier = shutil.which("omarchy-notification-send") or "/usr/share/omarchy/bin/omarchy-notification-send"
+    if os.path.isfile(notifier):
+        subprocess.run([notifier, "ScreenLens", message[:300]], check=False, timeout=5)
+
+
+def handoff_direct(args: argparse.Namespace, dry_run: bool = False) -> dict | int:
+    crop = None
+    if args.crop:
+        parts = [int(p.strip()) for p in args.crop.split(",")]
+        if len(parts) == 4 and parts[2] > 0 and parts[3] > 0:
+            crop = {"x": parts[0], "y": parts[1], "w": parts[2], "h": parts[3]}
+
+    messages: list[dict] = []
+    if args.messages_json:
+        try:
+            parsed = json.loads(args.messages_json)
+            if isinstance(parsed, list):
+                messages = parsed
+        except json.JSONDecodeError:
+            messages = []
+
+    crop_path = ""
+    if args.image and os.path.isfile(args.image) and crop is not None:
+        candidate = f"/tmp/omarchy-screenlens-handoff-{os.getuid()}-{int(time.time() * 1000)}.png"
+        fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.close(fd)
+        res = subprocess.run(
+            ["magick", args.image, "-crop", f"{crop['w']}x{crop['h']}+{crop['x']}+{crop['y']}", "+repage", candidate],
+            capture_output=True,
+            timeout=15,
+        )
+        if res.returncode == 0:
+            crop_path = candidate
+
+    md = build_context_markdown(
+        window_class=args.window_class,
+        window_title=args.window_title,
+        image_path=args.image,
+        crop=crop,
+        selected_text=args.selected_text,
+        messages=messages,
+        draft_prompt=args.draft,
+        crop_path=crop_path,
+    )
+    context_path = f"/tmp/omarchy-screenlens-context-{os.getuid()}-{int(time.time() * 1000)}.md"
+    fd = os.open(context_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as ctx_file:
+        ctx_file.write(md + "\n")
+
+    single_line_prompt = build_single_line_handoff_prompt(context_path, crop_path, args.image, args.draft)
+    if dry_run:
+        return {"ok": True, "prompt": single_line_prompt, "contextPath": context_path, "cropPath": crop_path}
+
+    agent_prompt_bin = shutil.which("omarchy-agent-prompt") or "/usr/share/omarchy/bin/omarchy-agent-prompt"
+    if not os.path.isfile(agent_prompt_bin):
+        notify_error("Could not find omarchy-agent-prompt.")
+        return 1
+    os.execvp(agent_prompt_bin, [agent_prompt_bin, single_line_prompt])
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -144,6 +246,16 @@ def main() -> int:
     p_handoff = sub.add_parser("handoff")
     p_handoff.add_argument("file")
 
+    p_direct = sub.add_parser("handoff-direct")
+    p_direct.add_argument("--image", default="")
+    p_direct.add_argument("--crop", default="")
+    p_direct.add_argument("--window-class", default="")
+    p_direct.add_argument("--window-title", default="")
+    p_direct.add_argument("--selected-text", default="")
+    p_direct.add_argument("--draft", default="")
+    p_direct.add_argument("--messages-json", default="[]")
+    p_direct.add_argument("--dry-run", action="store_true")
+
     args = parser.parse_args()
     if args.cmd == "copy-text":
         return copy_text_from_file(args.file)
@@ -154,6 +266,16 @@ def main() -> int:
         return 0
     if args.cmd == "handoff":
         return handoff_to_agent(args.file)
+    if args.cmd == "handoff-direct":
+        try:
+            result = handoff_direct(args, dry_run=args.dry_run)
+            if args.dry_run:
+                print(json.dumps(result), flush=True)
+                return 0
+            return int(result)
+        except Exception as exc:
+            notify_error(f"Agent handoff failed: {exc}")
+            return 1
     return 1
 
 

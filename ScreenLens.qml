@@ -347,42 +347,28 @@ Item {
     }
   }
 
-  function encodeUtf8Base64(str) {
-    return Qt.btoa(unescape(encodeURIComponent(String(str || ""))))
-  }
-
   function handoffToAgent() {
-    if (handoffProc.running) return
     var allMsgs = root.messages.slice()
     if (root.streamingText.trim().length > 0) {
       allMsgs.push({ role: "assistant", text: root.streamingText })
     }
     var crop = root.currentImageCrop()
-    var handoffPrompt = Logic.buildAgentHandoffPrompt({
-      windowClass: root.windowClass,
-      windowTitle: root.windowTitle,
-      imagePath: root.screenshotPath,
-      crop: crop,
-      selectedText: root.selectedText,
-      messages: allMsgs,
-      draftPrompt: promptField.text
-    })
-    var payloadJson = JSON.stringify({
-      prompt: handoffPrompt,
-      imagePath: root.screenshotPath,
-      crop: crop,
-      draftPrompt: promptField.text
-    })
-    root.showToast(strings.t("status.handoffSent"))
-    handoffProc.command = [
+    var cropSpec = crop ? (crop.x + "," + crop.y + "," + crop.w + "," + crop.h) : ""
+    // Detach directly via Omarchy's login-shell Util.execArgv so tearing down
+    // the on-demand overlay can never interrupt the handoff or its terminal.
+    Util.execArgv([
       "/usr/bin/python3",
       root.pluginDir + "/scripts/actions.py",
-      "prepare-handoff",
-      "--b64",
-      root.encodeUtf8Base64(payloadJson)
-    ]
-    handoffProc.running = false
-    handoffProc.running = true
+      "handoff-direct",
+      "--image", root.screenshotPath,
+      "--crop", cropSpec,
+      "--window-class", root.windowClass,
+      "--window-title", root.windowTitle,
+      "--selected-text", root.selectedText,
+      "--draft", promptField.text,
+      "--messages-json", JSON.stringify(allMsgs)
+    ])
+    root.dismiss()
   }
 
   function toggleVoice() {
@@ -558,30 +544,6 @@ Item {
     stdinEnabled: true
     command: ["/usr/bin/python3", root.pluginDir + "/scripts/actions.py", "copy-text", "-"]
     onStarted: copyTextProc.write(root.pendingCopyJson + "\n")
-  }
-
-  Process {
-    id: handoffProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var res = null
-        try { res = JSON.parse(text) } catch (e) { res = null }
-        if (res && res.ok && res.prompt) {
-          // Match Omarchy's first-party agents panel: detach via login shell so
-          // uwsm-app / xdg-terminal-exec / foot inherit the full desktop session.
-          Util.execArgv(["omarchy-agent-prompt", res.prompt])
-          root.dismiss()
-        } else {
-          root.errorMessage = strings.t("error.askFailed").arg("could not prepare agent handoff")
-        }
-      }
-    }
-    onExited: function(code) {
-      if (code !== 0) {
-        root.errorMessage = strings.t("error.askFailed").arg("agent handoff exited " + code)
-      }
-    }
   }
 
   Process {
@@ -1137,6 +1099,54 @@ Item {
                 }
               }
 
+              // Clear animated loading banner while waiting for the first token
+              Rectangle {
+                id: loadingBanner
+                visible: root.streaming && root.streamingText.length === 0
+                width: answerColumn.width
+                radius: Math.min(4, root.cornerRadius)
+                color: Util.alpha(root.accentColor, 0.12)
+                border.width: 1
+                border.color: Util.alpha(root.accentColor, 0.45)
+                implicitHeight: loadingRow.implicitHeight + Style.spacing.sm * 2
+
+                Row {
+                  id: loadingRow
+                  anchors.left: parent.left
+                  anchors.right: parent.right
+                  anchors.verticalCenter: parent.verticalCenter
+                  anchors.margins: Style.spacing.sm
+                  spacing: Style.spacing.sm
+
+                  PlainText {
+                    id: loadingSpinner
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "󰑓"
+                    color: root.accentColor
+                    font.family: root.uiFont
+                    font.pixelSize: Style.font.icon
+                    transformOrigin: Item.Center
+
+                    RotationAnimation on rotation {
+                      from: 0
+                      to: 360
+                      duration: Style.duration(900)
+                      loops: Animation.Infinite
+                      running: loadingBanner.visible && !Style.reduceMotion
+                    }
+                  }
+
+                  PlainText {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: strings.t("status.analyzing")
+                    color: root.fgColor
+                    font.family: root.uiFont
+                    font.pixelSize: Style.font.body
+                    font.bold: true
+                  }
+                }
+              }
+
               // Active streaming chunk
               Rectangle {
                 visible: root.streaming && root.streamingText.length > 0
@@ -1344,7 +1354,8 @@ Item {
               id: sendBtn
               anchors.verticalCenter: parent.verticalCenter
               text: root.streaming ? strings.t("prompt.stop") : strings.t("prompt.send")
-              iconText: root.streaming ? "󰓛" : "󰁕"
+              iconText: root.streaming ? "󰑓" : "󰁕"
+              iconSpinning: root.streaming
               selected: !root.streaming
               bordered: true
               onClicked: {

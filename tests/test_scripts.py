@@ -170,6 +170,41 @@ class ScreenLensTests(unittest.TestCase):
             if os.path.exists(prepared["contextPath"]):
                 os.unlink(prepared["contextPath"])
 
+        # Verify handoff-direct with UTF-8 Spanish window title and conversation history
+        proc = subprocess.run(
+            [
+                "python3",
+                os.path.join(ROOT_DIR, "scripts/actions.py"),
+                "handoff-direct",
+                "--window-class",
+                "chromium",
+                "--window-title",
+                "Recreación visual — EL PAÍS",
+                "--selected-text",
+                "cinco toneladas",
+                "--draft",
+                "Explain\nthis",
+                "--messages-json",
+                json.dumps([{"role": "user", "text": "Translate"}]),
+                "--dry-run",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        direct = json.loads(proc.stdout)
+        try:
+            self.assertTrue(direct["ok"])
+            self.assertNotIn("\n", direct["prompt"])
+            self.assertTrue(os.path.isfile(direct["contextPath"]))
+            with open(direct["contextPath"], "r", encoding="utf-8") as f:
+                md = f.read()
+            self.assertIn("Recreación visual — EL PAÍS", md)
+            self.assertIn("cinco toneladas", md)
+        finally:
+            if os.path.exists(direct["contextPath"]):
+                os.unlink(direct["contextPath"])
+
     def test_qml_ui_safety_and_motion_conventions(self):
         with open(os.path.join(ROOT_DIR, "ScreenLens.qml"), "r", encoding="utf-8") as f:
             qml = f.read()

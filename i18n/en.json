@@ -34,6 +34,7 @@
   "action.newChat": "Clear",
   "action.close": "Close",
   "status.thinking": "Thinking...",
+  "status.analyzing": "Analyzing screen...",
   "status.extractingText": "Extracting text...",
   "status.copiedToClipboard": "Copied to clipboard",
   "status.noTextFound": "No text found in selection",
