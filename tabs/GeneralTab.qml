@@ -188,7 +188,7 @@ Column {
           spacing: Style.space(4)
 
           SLUi.PillOption {
-            icon: "󰒅"
+            icon: "󰴲"
             label: tab.strings.t("mode.lasso")
             fgColor: tab.panel.fgColor
             accentColor: tab.panel.accentColor

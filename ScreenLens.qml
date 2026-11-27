@@ -54,6 +54,7 @@ Item {
   property real dragStartX: 0
   property real dragStartY: 0
   property bool lassoPinMode: false
+  property bool shiftKeyHeld: false
 
   // OCR state
   property bool ocrLoading: false
@@ -148,6 +149,7 @@ Item {
 
   function close() {
     root.stopBackgroundWork()
+    root.shiftKeyHeld = false
     root.opened = false
     root.capturing = false
   }
@@ -185,6 +187,7 @@ Item {
     root.dragHandle = ""
     root.dragStartRect = null
     root.lassoPinMode = false
+    root.shiftKeyHeld = false
     root.ocrLoading = false
     root.rawOcrWords = []
     root.ocrWords = []
@@ -258,11 +261,28 @@ Item {
     root.setSelectedWords([], "", null)
   }
 
+  function setMode(nextMode) {
+    if (nextMode !== "lasso" && nextMode !== "box" && nextMode !== "text") return
+    root.draggingCanvas = false
+    root.dragRegionIndex = -1
+    root.dragHandle = ""
+    root.dragStartRect = null
+    root.hoverRegionIndex = -1
+    root.hoverHandle = ""
+    root.lassoPoints = []
+    root.lassoPathPoints = []
+    root.boxStartPoint = null
+    root.boxPreviewRect = null
+    root.lassoPinMode = false
+    root.mode = nextMode
+    promptField.forceActiveFocus()
+  }
+
   function cycleMode(delta) {
     var order = ["lasso", "box", "text"]
     var idx = order.indexOf(root.mode)
     if (idx < 0) idx = 0
-    root.mode = order[(idx + delta + order.length) % order.length]
+    root.setMode(order[(idx + delta + order.length) % order.length])
   }
 
   function removeRegion(idx) {
@@ -867,9 +887,12 @@ Item {
       id: canvasMouse
       anchors.fill: parent
       hoverEnabled: true
+      preventStealing: true
       cursorShape: root.mode === "text"
         ? Qt.IBeamCursor
-        : root.cursorForHandle(root.dragHandle || root.hoverHandle)
+        : (root.shiftKeyHeld && !root.draggingCanvas
+            ? Qt.CrossCursor
+            : root.cursorForHandle(root.dragHandle || root.hoverHandle))
 
       onPressed: function(mouse) {
         if (mouse.button !== Qt.LeftButton) return
@@ -891,8 +914,8 @@ Item {
           return
         }
 
-        // In lasso mode: check if grabbing a corner/edge/interior handle on a locked region.
-        var shiftHeld = !!(mouse.modifiers & Qt.ShiftModifier)
+        // In Circle/Box mode: check if grabbing a corner/edge/interior handle on a locked region.
+        var shiftHeld = !!(mouse.modifiers & Qt.ShiftModifier) || root.shiftKeyHeld
         if (!shiftHeld && root.selectionRects.length > 0) {
           var hit = Logic.hitTestRegions(root.selectionRects, mouse.x, mouse.y, 12)
           if (hit.index >= 0 && hit.handle) {
@@ -938,7 +961,7 @@ Item {
 
       onPositionChanged: function(mouse) {
         if (!root.draggingCanvas) {
-          if (root.isRegionMode && root.selectionRects.length > 0) {
+          if (root.isRegionMode && root.selectionRects.length > 0 && !root.shiftKeyHeld) {
             var hHit = Logic.hitTestRegions(root.selectionRects, mouse.x, mouse.y, 12)
             root.hoverRegionIndex = hHit.index
             root.hoverHandle = hHit.handle
@@ -995,7 +1018,7 @@ Item {
           return
         }
 
-        var pts = root.lassoPoints
+        var pts = root.lassoPoints.slice()
         var last = pts.length > 0 ? pts[pts.length - 1] : null
         if (!last || Math.hypot(mouse.x - last.x, mouse.y - last.y) >= 4) {
           pts.push({ x: mouse.x, y: mouse.y })
@@ -1038,7 +1061,7 @@ Item {
             pts.push({ x: mouse.x, y: mouse.y })
             rect = Logic.computeSelectionRect(pts, panel.width, panel.height, 8)
           }
-          var pin = root.lassoPinMode || (!!(mouse.modifiers & Qt.ShiftModifier) && root.selectionRects.length > 0)
+          var pin = root.lassoPinMode || ((!!(mouse.modifiers & Qt.ShiftModifier) || root.shiftKeyHeld) && root.selectionRects.length > 0)
           if (rect) {
             if (pin) {
               if (root.selectionRects.length >= root.maxPinnedRegions) {
@@ -1061,6 +1084,18 @@ Item {
           root.lassoPinMode = false
         }
         promptField.forceActiveFocus()
+      }
+
+      onCanceled: {
+        root.draggingCanvas = false
+        root.dragRegionIndex = -1
+        root.dragHandle = ""
+        root.dragStartRect = null
+        root.lassoPoints = []
+        root.lassoPathPoints = []
+        root.boxStartPoint = null
+        root.boxPreviewRect = null
+        root.lassoPinMode = false
       }
 
       onExited: {
@@ -1291,7 +1326,7 @@ Item {
 
             Repeater {
               model: [
-                { id: "lasso", icon: "󰒅", label: strings.t("mode.lasso") },
+                { id: "lasso", icon: "󰴲", label: strings.t("mode.lasso") },
                 { id: "box",   icon: "󰒉", label: strings.t("mode.box") },
                 { id: "text",  icon: "󰗧", label: strings.t("mode.text") }
               ]
@@ -1331,10 +1366,7 @@ Item {
                 MouseArea {
                   anchors.fill: parent
                   cursorShape: Qt.PointingHandCursor
-                  onClicked: {
-                    root.mode = modelData.id
-                    promptField.forceActiveFocus()
-                  }
+                  onClicked: root.setMode(modelData.id)
                 }
               }
             }
@@ -2176,6 +2208,10 @@ Item {
               }
 
               Keys.onPressed: function(event) {
+                if (event.key === Qt.Key_Shift) {
+                  root.shiftKeyHeld = true
+                  return
+                }
                 if (event.key === Qt.Key_Escape) {
                   root.handleEscape()
                   event.accepted = true
@@ -2203,6 +2239,12 @@ Item {
                   else if (event.key === Qt.Key_2) { root.runQuickChip("summarize"); event.accepted = true }
                   else if (event.key === Qt.Key_3) { root.runQuickChip("translate"); event.accepted = true }
                   else if (event.key === Qt.Key_4) { root.runQuickChip("extract"); event.accepted = true }
+                }
+              }
+
+              Keys.onReleased: function(event) {
+                if (event.key === Qt.Key_Shift) {
+                  root.shiftKeyHeld = false
                 }
               }
             }
