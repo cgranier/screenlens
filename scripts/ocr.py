@@ -4,12 +4,92 @@
 import argparse
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
+import urllib.parse
 
 MAX_WORDS = 3000
 MAX_TEXT_CHARS = 32000
+MAX_CODES = 12
 MIN_CONF = 20.0
+_ZBAR_POINT_RE = re.compile(r"([+-]?\d+),([+-]?\d+)")
+
+
+def is_safe_web_url(value: str) -> bool:
+    raw = str(value or "").strip()
+    if not raw or len(raw) > 2048:
+        return False
+    if any(ch.isspace() or ord(ch) < 32 for ch in raw):
+        return False
+    try:
+        parsed = urllib.parse.urlparse(raw)
+    except ValueError:
+        return False
+    return parsed.scheme.lower() in ("http", "https") and bool(parsed.netloc) and "." in parsed.netloc
+
+
+def parse_zbar_polygon_output(output: str) -> list[dict]:
+    codes: list[dict] = []
+    seen: set[tuple[str, int, int]] = set()
+    for raw_line in (output or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split(":", 2)
+        if len(parts) < 3:
+            continue
+        code_type = parts[0].strip()
+        poly_spec = parts[1].strip()
+        payload = parts[2].strip()
+        if not payload:
+            continue
+        pts = [(int(x), int(y)) for x, y in _ZBAR_POINT_RE.findall(poly_spec)]
+        if pts:
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            x, y = max(0, min(xs)), max(0, min(ys))
+            w, h = max(1, max(xs) - x), max(1, max(ys) - y)
+        else:
+            x, y, w, h = 0, 0, 0, 0
+        dedupe_key = (payload, x, y)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        codes.append(
+            {
+                "type": code_type[:40],
+                "data": payload[:2048],
+                "isUrl": is_safe_web_url(payload),
+                "x": x,
+                "y": y,
+                "w": w,
+                "h": h,
+            }
+        )
+        if len(codes) >= MAX_CODES:
+            break
+    return codes
+
+
+def scan_barcodes(image_path: str) -> list[dict]:
+    zbar = shutil.which("zbarimg")
+    if not zbar or not image_path or not os.path.isfile(image_path):
+        return []
+    try:
+        proc = subprocess.run(
+            [zbar, "--quiet", "--nodbus", "--polygon", image_path],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    # zbarimg returns 0 on match and 4 when no barcodes are found.
+    if proc.returncode not in (0, 4):
+        return []
+    return parse_zbar_polygon_output(proc.stdout)
 
 
 def parse_crop(spec: str) -> tuple[int, int, int, int]:
@@ -185,7 +265,8 @@ def main() -> int:
             return 1
         tsv = proc.stdout.decode("utf-8", "replace")
         words = parse_tsv(tsv)
-        print(json.dumps({"ok": True, "words": words}), flush=True)
+        codes = scan_barcodes(args.image) if not crop_tuple else []
+        print(json.dumps({"ok": True, "words": words, "codes": codes}), flush=True)
         return 0
     except Exception as exc:
         print(json.dumps({"ok": False, "error": str(exc)}), flush=True)
