@@ -164,6 +164,49 @@ class ScreenLensTests(unittest.TestCase):
         oll_line = '{"message":{"role":"assistant","content":"Local"}}'
         self.assertEqual(ask_mod.parse_ollama_ndjson_line(oll_line), "Local")
 
+        oai_resp_line = 'data: {"type":"response.output_text.delta","delta":"Grounded"}'
+        self.assertEqual(ask_mod.parse_openai_responses_sse_line(oai_resp_line), "Grounded")
+        self.assertEqual(
+            ask_mod.parse_openai_responses_sse_line('data: {"type":"response.web_search_call.in_progress"}'),
+            "",
+        )
+
+    def test_web_search_grounding_payloads_and_cli_flags(self):
+        gem_off = ask_mod.build_gemini_payload("what is this?", "", "", [], web_search=False)
+        self.assertNotIn("tools", gem_off)
+        gem_on = ask_mod.build_gemini_payload("latest price?", "", "", [], web_search=True)
+        self.assertEqual(gem_on["tools"], [{"google_search": {}}])
+
+        ant_off = ask_mod.build_anthropic_payload("claude-haiku-4-5-20251001", "hi", "", "", [], web_search=False)
+        self.assertNotIn("tools", ant_off)
+        ant_on = ask_mod.build_anthropic_payload("claude-haiku-4-5-20251001", "news?", "", "", [], web_search=True)
+        self.assertEqual(ant_on["tools"][0]["type"], "web_search_20250305")
+        self.assertEqual(ant_on["tools"][0]["name"], "web_search")
+
+        oai_resp = ask_mod.build_openai_responses_payload(
+            "gpt-4.1-mini",
+            "check live weather",
+            "YWJj",
+            "image/png",
+            [{"role": "user", "text": "prev"}, {"role": "assistant", "text": "ans"}],
+            web_search=True,
+        )
+        self.assertEqual(oai_resp["tools"], [{"type": "web_search_preview"}])
+        self.assertEqual(oai_resp["input"][0]["content"][1]["type"], "input_image")
+        self.assertEqual(oai_resp["input"][1]["content"][0]["type"], "output_text")
+
+        claude_off = ask_mod.build_agent_cli_command("claude", "describe", web_search=False)
+        self.assertIn("Read", claude_off)
+        self.assertNotIn("Read,WebSearch,WebFetch", claude_off)
+        claude_on = ask_mod.build_agent_cli_command("claude", "describe", web_search=True)
+        self.assertIn("Read,WebSearch,WebFetch", claude_on)
+
+        grok_off = ask_mod.build_agent_cli_command("grok", "describe", web_search=False)
+        self.assertIn("--disable-web-search", grok_off)
+        grok_on = ask_mod.build_agent_cli_command("grok", "describe", web_search=True)
+        self.assertNotIn("--disable-web-search", grok_on)
+        self.assertIn("Read,WebSearch,WebFetch", grok_on)
+
     def test_voice_payload_extraction(self):
         sample = {"lastDictation": {"timestamp": "2026-11-25T20:00:00Z", "text": "Explain this chart"}}
         self.assertEqual(voice_mod.extract_text(sample), "Explain this chart")
