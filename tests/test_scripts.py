@@ -240,6 +240,88 @@ class ScreenLensTests(unittest.TestCase):
         self.assertNotIn("--disable-web-search", grok_on)
         self.assertIn("Read,WebSearch,WebFetch", grok_on)
 
+    def test_recaptured_frame_attaches_new_image_to_current_turn(self):
+        history = [
+            {"role": "user", "text": "Rate my roster"},
+            {"role": "assistant", "text": "Your WR depth is thin."},
+        ]
+        updated_text = ask_mod.compose_user_text(
+            "Who should I pick up here?",
+            "",
+            {"class": "chromium", "title": "Waiver Wire"},
+            has_crop=False,
+            image_updated=True,
+            frame_number=2,
+        )
+        self.assertIn("frame #2", updated_text)
+
+        # Anthropic: previous frame on turn 1, new frame on current turn.
+        ant = ask_mod.build_anthropic_payload(
+            "claude-haiku-4-5-20251001",
+            updated_text,
+            "NEW_B64",
+            "image/jpeg",
+            history,
+            image_updated=True,
+            prev_image_b64="OLD_B64",
+            prev_mime="image/png",
+        )
+        self.assertEqual(ant["messages"][0]["content"][0]["source"]["data"], "OLD_B64")
+        self.assertEqual(ant["messages"][-1]["content"][0]["source"]["data"], "NEW_B64")
+
+        # Gemini: previous frame on turn 1, new frame on current turn.
+        gem = ask_mod.build_gemini_payload(
+            updated_text,
+            "NEW_B64",
+            "image/jpeg",
+            history,
+            image_updated=True,
+            prev_image_b64="OLD_B64",
+            prev_mime="image/png",
+        )
+        self.assertEqual(gem["contents"][0]["parts"][0]["inline_data"]["data"], "OLD_B64")
+        self.assertEqual(gem["contents"][-1]["parts"][0]["inline_data"]["data"], "NEW_B64")
+
+        # OpenAI Chat & Responses: new frame attached on current turn.
+        oai = ask_mod.build_openai_payload(
+            "gpt-4.1-mini",
+            updated_text,
+            "NEW_B64",
+            "image/jpeg",
+            history,
+            image_updated=True,
+            prev_image_b64="OLD_B64",
+            prev_mime="image/png",
+        )
+        self.assertIn("OLD_B64", oai["messages"][1]["content"][1]["image_url"]["url"])
+        self.assertIn("NEW_B64", oai["messages"][-1]["content"][1]["image_url"]["url"])
+
+        oai_resp = ask_mod.build_openai_responses_payload(
+            "gpt-4.1-mini",
+            updated_text,
+            "NEW_B64",
+            "image/jpeg",
+            history,
+            web_search=True,
+            image_updated=True,
+            prev_image_b64="OLD_B64",
+            prev_mime="image/png",
+        )
+        self.assertIn("OLD_B64", oai_resp["input"][0]["content"][1]["image_url"])
+        self.assertIn("NEW_B64", oai_resp["input"][-1]["content"][1]["image_url"])
+
+        # Ollama: previous frame on turn 1, new frame on current turn.
+        oll = ask_mod.build_ollama_payload(
+            "llama3.2-vision",
+            updated_text,
+            "NEW_B64",
+            history,
+            image_updated=True,
+            prev_image_b64="OLD_B64",
+        )
+        self.assertEqual(oll["messages"][1]["images"], ["OLD_B64"])
+        self.assertEqual(oll["messages"][-1]["images"], ["NEW_B64"])
+
     def test_voice_payload_extraction(self):
         sample = {"lastDictation": {"timestamp": "2026-11-25T20:00:00Z", "text": "Explain this chart"}}
         self.assertEqual(voice_mod.extract_text(sample), "Explain this chart")

@@ -154,7 +154,14 @@ def prepare_image(image_path: str, crop: dict | None, max_dim: int = 1920) -> tu
         return f.read(), "image/png", saved_path
 
 
-def compose_user_text(prompt: str, selected_text: str, window_info: dict | None, has_crop: bool) -> str:
+def compose_user_text(
+    prompt: str,
+    selected_text: str,
+    window_info: dict | None,
+    has_crop: bool,
+    image_updated: bool = False,
+    frame_number: int = 1,
+) -> str:
     parts = []
     if isinstance(window_info, dict):
         cls = str(window_info.get("class") or "").strip()
@@ -162,7 +169,12 @@ def compose_user_text(prompt: str, selected_text: str, window_info: dict | None,
         if cls or title:
             label = f"{cls} — {title}" if cls and title else (cls or title)
             parts.append(f"[Active window: {label}]")
-    if has_crop:
+    if image_updated:
+        if has_crop:
+            parts.append(f"[Attached image: cropped region from updated screen capture (frame #{frame_number})]")
+        else:
+            parts.append(f"[Attached image: updated screen capture (frame #{frame_number}) — user recaptured the screen]")
+    elif has_crop:
         parts.append("[Attached image: cropped region selected by the user]")
     if selected_text:
         parts.append(f"[User highlighted text on screen:]\n{selected_text[:6000]}")
@@ -176,20 +188,28 @@ def build_gemini_payload(
     mime: str,
     history: list[dict],
     web_search: bool = False,
+    image_updated: bool = False,
+    prev_image_b64: str = "",
+    prev_mime: str = "",
 ) -> dict:
     contents = []
-    for idx, turn in enumerate(history[-MAX_HISTORY_TURNS:]):
+    user_seen = False
+    for turn in history[-MAX_HISTORY_TURNS:]:
         role = "model" if turn.get("role") == "assistant" else "user"
         text = str(turn.get("text") or "").strip()
         if not text:
             continue
         parts = [{"text": text}]
-        if idx == 0 and role == "user" and image_b64:
-            parts.insert(0, {"inline_data": {"mime_type": mime, "data": image_b64}})
+        if not user_seen and role == "user":
+            user_seen = True
+            hist_b64 = prev_image_b64 if image_updated else image_b64
+            hist_mime = prev_mime if image_updated else mime
+            if hist_b64:
+                parts.insert(0, {"inline_data": {"mime_type": hist_mime or mime, "data": hist_b64}})
         contents.append({"role": role, "parts": parts})
 
     current_parts = [{"text": user_text}]
-    if not contents and image_b64:
+    if image_b64 and (image_updated or not user_seen):
         current_parts.insert(0, {"inline_data": {"mime_type": mime, "data": image_b64}})
     contents.append({"role": "user", "parts": current_parts})
 
@@ -227,27 +247,37 @@ def build_anthropic_payload(
     mime: str,
     history: list[dict],
     web_search: bool = False,
+    image_updated: bool = False,
+    prev_image_b64: str = "",
+    prev_mime: str = "",
 ) -> dict:
     messages = []
-    for idx, turn in enumerate(history[-MAX_HISTORY_TURNS:]):
+    user_seen = False
+    for turn in history[-MAX_HISTORY_TURNS:]:
         role = "assistant" if turn.get("role") == "assistant" else "user"
         text = str(turn.get("text") or "").strip()
         if not text:
             continue
-        if idx == 0 and role == "user" and image_b64:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "source": {"type": "base64", "media_type": mime, "data": image_b64}},
-                        {"type": "text", "text": text},
-                    ],
-                }
-            )
+        if not user_seen and role == "user":
+            user_seen = True
+            hist_b64 = prev_image_b64 if image_updated else image_b64
+            hist_mime = prev_mime if image_updated else mime
+            if hist_b64:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "source": {"type": "base64", "media_type": hist_mime or mime, "data": hist_b64}},
+                            {"type": "text", "text": text},
+                        ],
+                    }
+                )
+            else:
+                messages.append({"role": role, "content": text})
         else:
             messages.append({"role": role, "content": text})
 
-    if not messages and image_b64:
+    if image_b64 and (image_updated or not user_seen):
         messages.append(
             {
                 "role": "user",
@@ -286,7 +316,16 @@ def parse_anthropic_sse_line(line: str) -> str:
     return ""
 
 
-def build_openai_payload(model: str, user_text: str, image_b64: str, mime: str, history: list[dict]) -> dict:
+def build_openai_payload(
+    model: str,
+    user_text: str,
+    image_b64: str,
+    mime: str,
+    history: list[dict],
+    image_updated: bool = False,
+    prev_image_b64: str = "",
+    prev_mime: str = "",
+) -> dict:
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
     user_seen = False
     for turn in history[-MAX_HISTORY_TURNS:]:
@@ -294,21 +333,26 @@ def build_openai_payload(model: str, user_text: str, image_b64: str, mime: str, 
         text = str(turn.get("text") or "").strip()
         if not text:
             continue
-        if not user_seen and role == "user" and image_b64:
+        if not user_seen and role == "user":
             user_seen = True
-            messages.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": text},
-                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}},
-                    ],
-                }
-            )
+            hist_b64 = prev_image_b64 if image_updated else image_b64
+            hist_mime = prev_mime if image_updated else mime
+            if hist_b64:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": text},
+                            {"type": "image_url", "image_url": {"url": f"data:{hist_mime or mime};base64,{hist_b64}"}},
+                        ],
+                    }
+                )
+            else:
+                messages.append({"role": role, "content": text})
         else:
             messages.append({"role": role, "content": text})
 
-    if not user_seen and image_b64:
+    if image_b64 and (image_updated or not user_seen):
         messages.append(
             {
                 "role": "user",
@@ -347,6 +391,9 @@ def build_openai_responses_payload(
     mime: str,
     history: list[dict],
     web_search: bool = True,
+    image_updated: bool = False,
+    prev_image_b64: str = "",
+    prev_mime: str = "",
 ) -> dict:
     items: list[dict] = []
     user_seen = False
@@ -355,22 +402,27 @@ def build_openai_responses_payload(
         text = str(turn.get("text") or "").strip()
         if not text:
             continue
-        if not user_seen and role == "user" and image_b64:
+        if not user_seen and role == "user":
             user_seen = True
-            items.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": text},
-                        {"type": "input_image", "image_url": f"data:{mime};base64,{image_b64}"},
-                    ],
-                }
-            )
+            hist_b64 = prev_image_b64 if image_updated else image_b64
+            hist_mime = prev_mime if image_updated else mime
+            if hist_b64:
+                items.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": text},
+                            {"type": "input_image", "image_url": f"data:{hist_mime or mime};base64,{hist_b64}"},
+                        ],
+                    }
+                )
+            else:
+                items.append({"role": role, "content": [{"type": "input_text", "text": text}]})
         else:
             content_type = "output_text" if role == "assistant" else "input_text"
             items.append({"role": role, "content": [{"type": content_type, "text": text}]})
 
-    if not user_seen and image_b64:
+    if image_b64 and (image_updated or not user_seen):
         items.append(
             {
                 "role": "user",
@@ -408,7 +460,14 @@ def parse_openai_responses_sse_line(line: str) -> str:
     return ""
 
 
-def build_ollama_payload(model: str, user_text: str, image_b64: str, history: list[dict]) -> dict:
+def build_ollama_payload(
+    model: str,
+    user_text: str,
+    image_b64: str,
+    history: list[dict],
+    image_updated: bool = False,
+    prev_image_b64: str = "",
+) -> dict:
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
     user_seen = False
     for turn in history[-MAX_HISTORY_TURNS:]:
@@ -417,13 +476,15 @@ def build_ollama_payload(model: str, user_text: str, image_b64: str, history: li
         if not text:
             continue
         msg: dict = {"role": role, "content": text}
-        if not user_seen and role == "user" and image_b64:
+        if not user_seen and role == "user":
             user_seen = True
-            msg["images"] = [image_b64]
+            hist_b64 = prev_image_b64 if image_updated else image_b64
+            if hist_b64:
+                msg["images"] = [hist_b64]
         messages.append(msg)
 
     cur: dict = {"role": "user", "content": user_text}
-    if not user_seen and image_b64:
+    if image_b64 and (image_updated or not user_seen):
         cur["images"] = [image_b64]
     messages.append(cur)
     return {"model": model, "stream": True, "messages": messages}
@@ -697,6 +758,9 @@ def run_agent_fallback(
     model: str = "",
     cli: str = "default",
     web_search: bool = False,
+    image_updated: bool = False,
+    previous_image_path: str = "",
+    frame_number: int = 1,
 ) -> None:
     agent = cli if (cli and cli != "default") else detect_default_agent()
     if not agent:
@@ -715,9 +779,20 @@ def run_agent_fallback(
     lines = [SYSTEM_PROMPT]
     if saved_image_path:
         if agent in ("codex", "opencode"):
-            lines.append("Inspect the attached screenshot image to answer the user's question.")
+            if image_updated:
+                lines.append(f"Inspect the newly recaptured screenshot image (frame #{frame_number}) attached to this turn.")
+            else:
+                lines.append("Inspect the attached screenshot image to answer the user's question.")
         else:
-            lines.append(f"Inspect the screenshot image file at {saved_image_path} using your file-reading tool.")
+            if image_updated:
+                lines.append(
+                    f"The user recaptured their screen (frame #{frame_number}). Inspect the updated screenshot image file at "
+                    f"{saved_image_path} using your file-reading tool."
+                )
+                if previous_image_path and previous_image_path != saved_image_path and os.path.isfile(previous_image_path):
+                    lines.append(f"(Earlier frame from this conversation, if needed for comparison: {previous_image_path})")
+            else:
+                lines.append(f"Inspect the screenshot image file at {saved_image_path} using your file-reading tool.")
     if web_search:
         lines.append("Live web search is enabled: use your web search tool to verify current or real-time facts when helpful.")
     for turn in history[-MAX_HISTORY_TURNS:]:
@@ -842,6 +917,9 @@ def main() -> int:
     history = req_data.get("history") or []
     task = str(req_data.get("task") or "general").strip().lower()
     web_search = bool(req_data.get("webSearch"))
+    image_updated = bool(req_data.get("imageUpdated"))
+    frame_number = max(1, int(req_data.get("frameNumber") or 1))
+    prev_image_path = str(req_data.get("previousImagePath") or "")
 
     config = load_config()
     max_dim = int(config.get("maxImageDim") or 1920)
@@ -851,7 +929,23 @@ def main() -> int:
         resolved = resolve_provider(config, task=task)
         img_bytes, mime, saved_path = prepare_image(image_path, crop, max_dim=max_dim)
         image_b64 = base64.b64encode(img_bytes).decode("ascii") if img_bytes else ""
-        user_text = compose_user_text(prompt, selected_text, window_info, has_crop=bool(crop))
+        prev_image_b64 = ""
+        prev_mime = ""
+        if image_updated and history and prev_image_path and prev_image_path != image_path and os.path.isfile(prev_image_path):
+            try:
+                prev_bytes, prev_mime, _ = prepare_image(prev_image_path, None, max_dim=min(max_dim, 1280))
+                prev_image_b64 = base64.b64encode(prev_bytes).decode("ascii") if prev_bytes else ""
+            except Exception:
+                prev_image_b64 = ""
+                prev_mime = ""
+        user_text = compose_user_text(
+            prompt,
+            selected_text,
+            window_info,
+            has_crop=bool(crop),
+            image_updated=image_updated,
+            frame_number=frame_number,
+        )
         provider = resolved["provider"]
         model = resolved["model"]
 
@@ -863,6 +957,9 @@ def main() -> int:
                 model=model,
                 cli=str(resolved.get("cli") or "default"),
                 web_search=web_search,
+                image_updated=image_updated,
+                previous_image_path=prev_image_path,
+                frame_number=frame_number,
             )
             return 0
 
@@ -873,7 +970,18 @@ def main() -> int:
             emit({"type": "meta", "provider": "gemini", "model": model, "croppedPath": saved_path, "webSearch": web_search})
             safe_model = urllib.parse.quote(model, safe=".-_")
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{safe_model}:streamGenerateContent?alt=sse"
-            body = json.dumps(build_gemini_payload(user_text, image_b64, mime, history, web_search=web_search)).encode("utf-8")
+            body = json.dumps(
+                build_gemini_payload(
+                    user_text,
+                    image_b64,
+                    mime,
+                    history,
+                    web_search=web_search,
+                    image_updated=image_updated,
+                    prev_image_b64=prev_image_b64,
+                    prev_mime=prev_mime,
+                )
+            ).encode("utf-8")
             req = urllib.request.Request(
                 url,
                 data=body,
@@ -890,7 +998,17 @@ def main() -> int:
                 raise RuntimeError("Missing Anthropic API key (set ANTHROPIC_API_KEY or ~/.config/omarchy/screenlens.json)")
             emit({"type": "meta", "provider": "anthropic", "model": model, "croppedPath": saved_path, "webSearch": web_search})
             body = json.dumps(
-                build_anthropic_payload(model, user_text, image_b64, mime, history, web_search=web_search)
+                build_anthropic_payload(
+                    model,
+                    user_text,
+                    image_b64,
+                    mime,
+                    history,
+                    web_search=web_search,
+                    image_updated=image_updated,
+                    prev_image_b64=prev_image_b64,
+                    prev_mime=prev_mime,
+                )
             ).encode("utf-8")
             req = urllib.request.Request(
                 "https://api.anthropic.com/v1/messages",
@@ -913,7 +1031,17 @@ def main() -> int:
             emit({"type": "meta", "provider": "openai", "model": model, "croppedPath": saved_path, "webSearch": web_search})
             if web_search:
                 body = json.dumps(
-                    build_openai_responses_payload(model, user_text, image_b64, mime, history, web_search=True)
+                    build_openai_responses_payload(
+                        model,
+                        user_text,
+                        image_b64,
+                        mime,
+                        history,
+                        web_search=True,
+                        image_updated=image_updated,
+                        prev_image_b64=prev_image_b64,
+                        prev_mime=prev_mime,
+                    )
                 ).encode("utf-8")
                 req = urllib.request.Request(
                     "https://api.openai.com/v1/responses",
@@ -926,7 +1054,18 @@ def main() -> int:
                 )
                 stream_http(req, parse_openai_responses_sse_line)
             else:
-                body = json.dumps(build_openai_payload(model, user_text, image_b64, mime, history)).encode("utf-8")
+                body = json.dumps(
+                    build_openai_payload(
+                        model,
+                        user_text,
+                        image_b64,
+                        mime,
+                        history,
+                        image_updated=image_updated,
+                        prev_image_b64=prev_image_b64,
+                        prev_mime=prev_mime,
+                    )
+                ).encode("utf-8")
                 req = urllib.request.Request(
                     "https://api.openai.com/v1/chat/completions",
                     data=body,
@@ -943,7 +1082,16 @@ def main() -> int:
         if provider == "ollama":
             host = resolved["host"]
             emit({"type": "meta", "provider": "ollama", "model": model, "croppedPath": saved_path, "webSearch": False})
-            body = json.dumps(build_ollama_payload(model, user_text, image_b64, history)).encode("utf-8")
+            body = json.dumps(
+                build_ollama_payload(
+                    model,
+                    user_text,
+                    image_b64,
+                    history,
+                    image_updated=image_updated,
+                    prev_image_b64=prev_image_b64,
+                )
+            ).encode("utf-8")
             req = urllib.request.Request(
                 f"{host}/api/chat",
                 data=body,

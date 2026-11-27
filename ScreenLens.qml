@@ -20,9 +20,15 @@ Item {
 
   property bool opened: false
   property bool capturing: false
+  property bool recaptureArmed: false
+  property bool pendingRecapture: false
 
   // Captured frame & active window metadata
   property string screenshotPath: ""
+  property string previousScreenshotPath: ""
+  property int frameRevision: 1
+  property bool frameUpdatedSinceLastAsk: false
+  property string lastAskedCropKey: ""
   property int imageWidth: 0
   property int imageHeight: 0
   property string windowClass: ""
@@ -112,6 +118,10 @@ Item {
   // ---------------------------------------------------------------- lifecycle
 
   function open(payloadJson) {
+    if (root.recaptureArmed) {
+      root.captureRecaptureFrame()
+      return
+    }
     if (root.opened) {
       root.dismiss()
       return
@@ -128,6 +138,9 @@ Item {
 
   function close() {
     root.stopBackgroundWork()
+    recaptureDelayTimer.stop()
+    root.recaptureArmed = false
+    root.pendingRecapture = false
     root.opened = false
     root.capturing = false
   }
@@ -144,9 +157,41 @@ Item {
     else root.open("{}")
   }
 
+  function startRecapturePause() {
+    if (root.capturing) return
+    root.stopBackgroundWork()
+    root.recaptureArmed = true
+    root.opened = false
+  }
+
+  function cancelRecapturePause() {
+    recaptureDelayTimer.stop()
+    root.recaptureArmed = false
+    root.pendingRecapture = false
+    root.opened = true
+    Qt.callLater(function() {
+      promptField.forceActiveFocus()
+    })
+  }
+
+  function captureRecaptureFrame() {
+    if (root.capturing) return
+    root.recaptureArmed = false
+    root.pendingRecapture = true
+    root.capturing = true
+    recaptureDelayTimer.restart()
+  }
+
   function resetSession() {
     root.stopBackgroundWork()
+    recaptureDelayTimer.stop()
+    root.recaptureArmed = false
+    root.pendingRecapture = false
     root.screenshotPath = ""
+    root.previousScreenshotPath = ""
+    root.frameRevision = 1
+    root.frameUpdatedSinceLastAsk = false
+    root.lastAskedCropKey = ""
     root.imageWidth = 0
     root.imageHeight = 0
     root.windowClass = ""
@@ -258,8 +303,13 @@ Item {
     }
 
     var history = root.messages.slice()
+    var crop = root.currentImageCrop()
+    var cropKey = crop ? (crop.x + "," + crop.y + "," + crop.w + "," + crop.h) : ""
+    var hasHistory = history.length > 0
+    var isUpdatedImage = hasHistory && (root.frameUpdatedSinceLastAsk || (cropKey !== "" && cropKey !== root.lastAskedCropKey))
+
     var nextMessages = root.messages.slice()
-    nextMessages.push({ role: "user", text: text })
+    nextMessages.push({ role: "user", text: text, frameNumber: isUpdatedImage ? root.frameRevision : 0 })
     root.messages = nextMessages
     if (overridePrompt === undefined) promptField.text = ""
 
@@ -274,12 +324,17 @@ Item {
       prompt: text,
       task: root.inferTask(explicitTask),
       imagePath: root.screenshotPath,
-      crop: root.currentImageCrop(),
+      crop: crop,
       selectedText: root.selectedText,
       windowInfo: { class: root.windowClass, title: root.windowTitle },
       history: history,
-      webSearch: root.webSearchEnabled
+      webSearch: root.webSearchEnabled,
+      imageUpdated: isUpdatedImage,
+      frameNumber: root.frameRevision,
+      previousImagePath: isUpdatedImage ? root.previousScreenshotPath : ""
     }
+    root.frameUpdatedSinceLastAsk = false
+    root.lastAskedCropKey = cropKey
     root.pendingAskJson = JSON.stringify(payload)
     askProc.running = false
     askProc.running = true
@@ -508,25 +563,32 @@ Item {
   }
 
   function contextBadgeText() {
+    var prefix = ""
+    if (root.frameRevision > 1) {
+      var frameTpl = strings.t("context.framePrefix")
+      prefix = (frameTpl.indexOf("%1") !== -1
+        ? frameTpl.arg(Commons.I18n.formatNumber(root.frameRevision))
+        : ("Frame " + root.frameRevision)) + " · "
+    }
     if (root.selectedText) {
       var selTpl = strings.t("context.selectedText")
-      return selTpl.indexOf("%1") !== -1
+      return prefix + (selTpl.indexOf("%1") !== -1
         ? selTpl.arg(Commons.I18n.formatNumber(root.selectedText.length))
-        : ("Selected text (" + root.selectedText.length + ")")
+        : ("Selected text (" + root.selectedText.length + ")"))
     }
     if (root.selectionRect) {
       var crop = root.currentImageCrop()
       var w = crop ? crop.w : Math.round(root.selectionRect.w)
       var h = crop ? crop.h : Math.round(root.selectionRect.h)
       var regTpl = strings.t("context.region")
-      return regTpl.indexOf("%1") !== -1
+      return prefix + (regTpl.indexOf("%1") !== -1
         ? regTpl.arg(Commons.I18n.formatNumber(w)).arg(Commons.I18n.formatNumber(h))
-        : ("Region (" + w + "×" + h + ")")
+        : ("Region (" + w + "×" + h + ")"))
     }
     if (root.windowClass) {
-      return strings.t("context.fullScreen") + " · " + root.windowClass
+      return prefix + strings.t("context.fullScreen") + " · " + root.windowClass
     }
-    return strings.t("context.fullScreen")
+    return prefix + strings.t("context.fullScreen")
   }
 
   // ---------------------------------------------------------------- processes
@@ -536,6 +598,18 @@ Item {
     interval: 2200
     repeat: false
     onTriggered: root.toastMessage = ""
+  }
+
+  // Wait for Wayland to unmap the floating recapture pill cleanly before
+  // invoking grim so zero ScreenLens pixels appear in the recaptured frame.
+  Timer {
+    id: recaptureDelayTimer
+    interval: 120
+    repeat: false
+    onTriggered: {
+      captureProc.running = false
+      captureProc.running = true
+    }
   }
 
   Timer {
@@ -596,10 +670,18 @@ Item {
       waitForEnd: true
       onStreamFinished: {
         root.capturing = false
+        var isRecapture = root.pendingRecapture
+        root.pendingRecapture = false
         var res = null
         try { res = JSON.parse(text) } catch (e) { res = null }
         if (!res || !res.ok || !res.imagePath) {
           var err = res && res.error ? res.error : "capture failed"
+          if (isRecapture) {
+            root.opened = true
+            root.showToast(strings.t("status.recaptureFailed").arg(err))
+            Qt.callLater(function() { promptField.forceActiveFocus() })
+            return
+          }
           Quickshell.execDetached([
             root.omarchyPath + "/bin/omarchy-notification-send",
             "ScreenLens",
@@ -607,6 +689,17 @@ Item {
           ])
           root.dismiss()
           return
+        }
+        if (isRecapture) {
+          if (root.screenshotPath && root.screenshotPath !== res.imagePath) {
+            root.previousScreenshotPath = root.screenshotPath
+          }
+          root.clearSelection()
+          root.rawOcrWords = []
+          root.ocrWords = []
+          root.frameRevision = root.frameRevision + 1
+          root.frameUpdatedSinceLastAsk = true
+          root.showToast(strings.t("status.recapturedFrame").arg(Commons.I18n.formatNumber(root.frameRevision)))
         }
         root.screenshotPath = res.imagePath
         root.imageWidth = Number(res.imageWidth) || 0
@@ -1134,6 +1227,15 @@ Item {
           onClicked: root.clearSelection()
         }
 
+        Ui.Button {
+          foreground: root.fgColor
+          text: strings.t("action.recapture")
+          iconText: "󰑐"
+          fontSize: Style.font.bodySmall
+          tooltipText: strings.t("action.recaptureTooltip")
+          onClicked: root.startRecapturePause()
+        }
+
         Rectangle {
           width: 1
           height: Style.space(16)
@@ -1431,7 +1533,7 @@ Item {
                     ? Util.alpha(root.accentColor, 0.25)
                     : Util.alpha(root.fgColor, 0.07)
                   clip: true
-                  implicitHeight: (isUser ? userMsgText.implicitHeight : assistantBlocks.implicitHeight) + Style.spacing.sm * 2 + Style.space(4)
+                  implicitHeight: (isUser ? userMsgCol.implicitHeight : assistantBlocks.implicitHeight) + Style.spacing.sm * 2 + Style.space(4)
 
                   // Subtle 3 px left accent edge on user prompts
                   Rectangle {
@@ -1443,8 +1545,8 @@ Item {
                     color: root.accentColor
                   }
 
-                  PlainText {
-                    id: userMsgText
+                  Column {
+                    id: userMsgCol
                     visible: parent.isUser
                     anchors.left: parent.left
                     anchors.right: parent.right
@@ -1452,12 +1554,51 @@ Item {
                     anchors.leftMargin: Style.spacing.md + Style.space(3)
                     anchors.rightMargin: Style.spacing.md
                     anchors.topMargin: Style.spacing.sm + Style.space(2)
-                    text: modelData.text
-                    color: root.fgColor
-                    font.family: root.uiFont
-                    font.pixelSize: Style.font.body
-                    font.bold: true
-                    wrapMode: Text.Wrap
+                    spacing: Style.space(4)
+
+                    Rectangle {
+                      visible: Number(modelData.frameNumber || 0) > 1
+                      radius: Math.min(3, root.cornerRadius)
+                      color: Util.alpha(root.accentColor, 0.18)
+                      border.width: 1
+                      border.color: Util.alpha(root.accentColor, 0.42)
+                      implicitWidth: frameTagRow.implicitWidth + Style.space(10)
+                      implicitHeight: frameTagRow.implicitHeight + Style.space(3)
+
+                      Row {
+                        id: frameTagRow
+                        anchors.centerIn: parent
+                        spacing: Style.space(4)
+
+                        PlainText {
+                          anchors.verticalCenter: parent.verticalCenter
+                          text: "󰑐"
+                          color: root.accentColor
+                          font.family: root.uiFont
+                          font.pixelSize: Style.font.caption
+                        }
+
+                        PlainText {
+                          anchors.verticalCenter: parent.verticalCenter
+                          text: strings.t("context.framePrefix").arg(Commons.I18n.formatNumber(Number(modelData.frameNumber || 2))).toUpperCase()
+                          color: root.accentColor
+                          font.family: root.uiFont
+                          font.pixelSize: Style.font.caption
+                          font.bold: true
+                          font.letterSpacing: 0.6
+                        }
+                      }
+                    }
+
+                    PlainText {
+                      width: parent.width
+                      text: modelData.text
+                      color: root.fgColor
+                      font.family: root.uiFont
+                      font.pixelSize: Style.font.body
+                      font.bold: true
+                      wrapMode: Text.Wrap
+                    }
                   }
 
                   SLUi.AnswerBlocks {
@@ -1964,6 +2105,9 @@ Item {
                 } else if (event.key === Qt.Key_Tab) {
                   root.mode = (root.mode === "lasso") ? "text" : "lasso"
                   event.accepted = true
+                } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_R) {
+                  root.startRecapturePause()
+                  event.accepted = true
                 } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_G) {
                   root.webSearchEnabled = !root.webSearchEnabled
                   event.accepted = true
@@ -2026,5 +2170,24 @@ Item {
         }
       }
     }
+  }
+
+  SLUi.RecapturePill {
+    id: recapturePill
+    armed: root.recaptureArmed
+    bgColor: root.bgColor
+    fgColor: root.fgColor
+    accentColor: root.accentColor
+    hairlineColor: root.hairlineColor
+    cardBorderSpec: root.cardBorderSpec
+    cornerRadius: root.cornerRadius
+    uiFont: root.uiFont
+    hintText: strings.t("status.recaptureArmed").arg(
+      (root.userConfig && root.userConfig.keybind) ? String(root.userConfig.keybind) : "SUPER + ALT + A"
+    )
+    snapLabel: strings.t("action.recaptureSnap")
+    resumeLabel: strings.t("action.recaptureResume")
+    onSnapRequested: root.captureRecaptureFrame()
+    onResumeRequested: root.cancelRecapturePause()
   }
 }
