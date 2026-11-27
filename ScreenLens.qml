@@ -349,7 +349,7 @@ Item {
     }
     if (!root.screenshotPath) return
     root.showToast(strings.t("status.extractingText"))
-    var args = ["/usr/bin/python3", root.pluginDir + "/scripts/ocr.py", root.screenshotPath, "--text-only", "--copy"]
+    var args = ["/usr/bin/python3", root.pluginDir + "/scripts/ocr.py", root.screenshotPath, "--text-only"]
     var crop = root.currentImageCrop()
     if (crop) {
       args.push("--crop")
@@ -625,9 +625,16 @@ Item {
       onStreamFinished: {
         var res = null
         try { res = JSON.parse(text) } catch (e) { res = null }
-        if (res && res.ok && res.text) {
-          root.selectedText = res.text
-          root.showToast(strings.t("status.copiedToClipboard"))
+        var extracted = (res && res.ok && res.text) ? String(res.text).trim() : ""
+        if (!extracted && root.selectionRect && root.ocrWords.length > 0) {
+          var fallback = Logic.selectWordsBetween(root.ocrWords, -1, -1, root.selectionRect)
+          if (fallback && fallback.text) extracted = String(fallback.text).trim()
+        }
+        if (extracted) {
+          root.selectedText = extracted
+          root.copyText(extracted)
+        } else if (res && !res.ok && res.error) {
+          root.showToast(String(res.error))
         } else {
           root.showToast(strings.t("status.noTextFound"))
         }
