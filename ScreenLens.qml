@@ -67,10 +67,11 @@ Item {
   property string voiceLastTranscript: ""
   property int voiceTick: 0
 
-  // Pending stdin payloads for Process helpers
+  // Pending stdin payloads / queued commands for Process helpers
   property string pendingAskJson: ""
-  property string pendingCopyJson: ""
   property string pendingHandoffJson: ""
+  property bool extractCancelled: false
+  property var pendingExtractCommand: null
 
   // User config loaded from 0600 ~/.config/omarchy/screenlens.json on open
   property var userConfig: ({})
@@ -184,7 +185,11 @@ Item {
   function stopBackgroundWork() {
     if (askProc.running) askProc.running = false
     if (ocrProc.running) ocrProc.running = false
-    if (extractProc.running) extractProc.running = false
+    root.pendingExtractCommand = null
+    if (extractProc.running) {
+      root.extractCancelled = true
+      extractProc.running = false
+    }
     if (root.voiceState === "recording") {
       root.voiceState = "idle"
       Quickshell.execDetached(["/usr/bin/python3", root.pluginDir + "/scripts/voice.py", "cancel"])
@@ -347,25 +352,45 @@ Item {
       root.copyText(root.selectedText)
       return
     }
+    // Instant 0 ms path: reuse words already scanned by background OCR.
+    if (!root.ocrLoading && root.ocrWords.length > 0) {
+      var instant = root.selectionRect
+        ? Logic.extractWordsInRect(root.ocrWords, root.selectionRect)
+        : Logic.selectWordsBetween(root.ocrWords, 0, root.ocrWords.length - 1, null)
+      if (instant && instant.text && instant.text.trim().length > 0) {
+        var cleanInstant = instant.text.trim()
+        root.selectedText = cleanInstant
+        root.copyText(cleanInstant)
+        return
+      }
+    }
     if (!root.screenshotPath) return
-    root.showToast(strings.t("status.extractingText"))
+    root.toastMessage = strings.t("status.extractingText")
+    toastTimer.stop()
     var args = ["/usr/bin/python3", root.pluginDir + "/scripts/ocr.py", root.screenshotPath, "--text-only"]
     var crop = root.currentImageCrop()
     if (crop) {
       args.push("--crop")
       args.push(crop.x + "," + crop.y + "," + crop.w + "," + crop.h)
     }
-    extractProc.running = false
-    extractProc.command = args
-    extractProc.running = true
+    if (extractProc.running) {
+      root.extractCancelled = true
+      root.pendingExtractCommand = args
+      extractProc.running = false
+    } else {
+      root.extractCancelled = false
+      root.pendingExtractCommand = null
+      extractProc.command = args
+      extractProc.running = true
+    }
   }
 
   function copyText(text) {
     var s = String(text || "")
     if (!s) return
-    root.pendingCopyJson = JSON.stringify({ text: s })
-    copyTextProc.running = false
-    copyTextProc.running = true
+    // Detach wl-copy directly so dismissing ScreenLens to paste can never
+    // tear down the clipboard process before the selection is committed.
+    Quickshell.execDetached(["wl-copy", "--", s.slice(0, 65536)])
     root.showToast(strings.t("status.copiedToClipboard"))
   }
 
@@ -623,11 +648,12 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        if (root.extractCancelled) return
         var res = null
         try { res = JSON.parse(text) } catch (e) { res = null }
         var extracted = (res && res.ok && res.text) ? String(res.text).trim() : ""
         if (!extracted && root.selectionRect && root.ocrWords.length > 0) {
-          var fallback = Logic.selectWordsBetween(root.ocrWords, -1, -1, root.selectionRect)
+          var fallback = Logic.extractWordsInRect(root.ocrWords, root.selectionRect)
           if (fallback && fallback.text) extracted = String(fallback.text).trim()
         }
         if (extracted) {
@@ -638,6 +664,17 @@ Item {
         } else {
           root.showToast(strings.t("status.noTextFound"))
         }
+      }
+    }
+    onExited: {
+      if (root.pendingExtractCommand) {
+        var nextCmd = root.pendingExtractCommand
+        root.pendingExtractCommand = null
+        root.extractCancelled = false
+        extractProc.command = nextCmd
+        extractProc.running = true
+      } else {
+        root.extractCancelled = false
       }
     }
   }
@@ -663,13 +700,6 @@ Item {
         root.streamingText = ""
       }
     }
-  }
-
-  Process {
-    id: copyTextProc
-    stdinEnabled: true
-    command: ["/usr/bin/python3", root.pluginDir + "/scripts/actions.py", "copy-text", "-"]
-    onStarted: copyTextProc.write(root.pendingCopyJson + "\n")
   }
 
   Process {

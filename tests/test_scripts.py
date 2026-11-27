@@ -109,7 +109,7 @@ class ScreenLensTests(unittest.TestCase):
             ocr_mod.run_tesseract_text = fake_run
             try:
                 self.assertEqual(ocr_mod.extract_text_with_fallbacks(img_path, (50, 20, 500, 160), "eng"), "FALLBACK TEXT")
-                self.assertEqual(calls, ["6", "3"])
+                self.assertEqual(calls, ["6", "11"])
             finally:
                 ocr_mod.run_tesseract_text = orig_run
 

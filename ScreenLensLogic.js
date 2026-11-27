@@ -151,6 +151,30 @@ function selectWordsBetween(words, startIdx, endIdx, dragRect) {
   return formatSelectedWords(words, indices)
 }
 
+// Extracts OCR words whose center points fall inside rect (with a 2 px margin)
+// in reading order with line breaks preserved. Enables 0 ms Extract Text when
+// full-screen OCR has already completed.
+function extractWordsInRect(words, rect) {
+  if (!Array.isArray(words) || words.length === 0 || !rect) {
+    return { indices: [], text: "", bounds: null }
+  }
+  var x1 = rect.x - 2
+  var y1 = rect.y - 2
+  var x2 = rect.x + rect.w + 2
+  var y2 = rect.y + rect.h + 2
+  var indices = []
+  for (var i = 0; i < words.length; i++) {
+    var w = words[i]
+    if (!w) continue
+    var cx = w.x + w.w * 0.5
+    var cy = w.y + w.h * 0.5
+    if (cx >= x1 && cx <= x2 && cy >= y1 && cy <= y2) {
+      indices.push(i)
+    }
+  }
+  return formatSelectedWords(words, indices)
+}
+
 function formatSelectedWords(words, indices) {
   if (!Array.isArray(indices) || indices.length === 0) {
     return { indices: [], text: "", bounds: null }

@@ -110,15 +110,8 @@ def extract_text_with_fallbacks(
         return run_tesseract_text(image_path, None, langs, "3")
 
     raw_bytes = cropped_png_bytes(image_path, crop_tuple, upscale=False)
-    for psm in ("6", "3", "11"):
-        text = run_tesseract_text("stdin", raw_bytes, langs, psm)
-        if text:
-            return text
-
-    # Fallback pass: 2x upscale helps Tesseract read small or tightly cropped UI text.
-    up_bytes = cropped_png_bytes(image_path, crop_tuple, upscale=True)
     for psm in ("6", "11"):
-        text = run_tesseract_text("stdin", up_bytes, langs, psm)
+        text = run_tesseract_text("stdin", raw_bytes, langs, psm)
         if text:
             return text
     return ""
