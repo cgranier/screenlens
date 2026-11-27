@@ -1048,6 +1048,15 @@ function filterHistorySessions(sessions, query) {
   return out
 }
 
+// Formats a byte count into a compact human label ("0 B", "142 KB", "1.8 MB").
+function formatBytes(bytes) {
+  var b = Number(bytes || 0)
+  if (!(b > 0)) return "0 B"
+  if (b < 1024) return Math.round(b) + " B"
+  if (b < 1024 * 1024) return Math.round(b / 1024) + " KB"
+  return (b / (1024 * 1024)).toFixed(1) + " MB"
+}
+
 // Formats an epoch-ms timestamp into a compact relative label ("Just now", "5m ago", "2h ago", "3d ago").
 function formatRelativeTime(epochMs, nowMs) {
   var ts = Number(epochMs || 0)

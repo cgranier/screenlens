@@ -119,8 +119,12 @@ Column {
     SLRoot.PlainText {
       visible: tab.panel.historySessions.length > 0
       anchors.right: parent.right
-      text: "0600 ~/.local/state/omarchy/screenlens"
-      color: Util.alpha(tab.panel.fgColor, 0.35)
+      text: {
+        var days = Number(tab.panel.cfgVal("historyRetentionDays", 1))
+        var ttl = days <= 1 ? "24h" : (days + "d")
+        return Logic.formatBytes(tab.panel.historyStorageBytes) + " · " + ttl + " TTL · 0600"
+      }
+      color: Util.alpha(tab.panel.fgColor, 0.42)
       font.family: tab.panel.uiFont
       font.pixelSize: Math.max(9, Style.font.caption - 1)
     }
@@ -166,7 +170,8 @@ Column {
         readonly property var preview: Logic.sessionPreview(modelData)
         readonly property bool expanded: tab.panel.selectedHistoryId === modelData.id
         readonly property bool confirmingDelete: tab.panel.confirmDeleteId === modelData.id
-        readonly property bool hasThumb: !!modelData.thumbPath
+        readonly property bool hasThumb: !!(modelData.framePath || modelData.thumbPath)
+        readonly property string thumbSource: String(modelData.framePath || modelData.thumbPath || "")
 
         width: parent.width
         fill: expanded ? Util.alpha(tab.panel.accentColor, 0.06) : tab.panel.cardFill
@@ -211,7 +216,8 @@ Column {
                 id: thumbImg
                 anchors.fill: parent
                 visible: sessCard.hasThumb && status === Image.Ready
-                source: sessCard.hasThumb ? ("file://" + sessCard.modelData.thumbPath) : ""
+                source: sessCard.hasThumb ? ("file://" + sessCard.thumbSource) : ""
+                sourceSize.width: 160
                 fillMode: Image.PreserveAspectCrop
                 asynchronous: true
                 cache: false

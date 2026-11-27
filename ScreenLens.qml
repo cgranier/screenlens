@@ -27,6 +27,13 @@ Item {
   property int imageHeight: 0
   property string windowClass: ""
   property string windowTitle: ""
+  property string liveScreenshotPath: ""
+  property int liveImageWidth: 0
+  property int liveImageHeight: 0
+  property string liveWindowClass: ""
+  property string liveWindowTitle: ""
+  property bool resumedFrameActive: false
+  property bool sessionFrameReplaced: false
 
   // Interaction mode: "lasso" (freehand circle), "box" (rectangle marquee), or "text" (OCR word selection)
   property string mode: "lasso"
@@ -229,6 +236,13 @@ Item {
     root.imageHeight = 0
     root.windowClass = ""
     root.windowTitle = ""
+    root.liveScreenshotPath = ""
+    root.liveImageWidth = 0
+    root.liveImageHeight = 0
+    root.liveWindowClass = ""
+    root.liveWindowTitle = ""
+    root.resumedFrameActive = false
+    root.sessionFrameReplaced = false
     root.mode = "lasso"
     root.lassoPoints = []
     root.lassoPathPoints = []
@@ -486,8 +500,10 @@ Item {
       webSearch: root.answerUsedWebSearch,
       selectedText: root.selectedText,
       imagePath: root.screenshotPath,
+      replaceFrame: root.sessionFrameReplaced,
       messages: root.messages
     }
+    root.sessionFrameReplaced = false
     root.pendingHistorySaveJson = JSON.stringify(payload)
     historySaveProc.running = false
     historySaveProc.running = true
@@ -501,6 +517,33 @@ Item {
     historyGetProc.running = true
   }
 
+  function switchToLiveScreen(silent) {
+    if (!root.liveScreenshotPath) return
+    var wasResumed = root.resumedFrameActive
+    root.resumedFrameActive = false
+    root.screenshotPath = root.liveScreenshotPath
+    root.imageWidth = root.liveImageWidth
+    root.imageHeight = root.liveImageHeight
+    root.windowClass = root.liveWindowClass
+    root.windowTitle = root.liveWindowTitle
+    if (wasResumed && root.sessionId) {
+      root.sessionFrameReplaced = true
+    }
+    root.clearSelection()
+    root.rawOcrWords = []
+    root.ocrWords = []
+    root.rawOcrCodes = []
+    root.ocrCodes = []
+    root.ocrLoading = true
+    ocrProc.command = ["/usr/bin/python3", root.pluginDir + "/scripts/ocr.py", root.screenshotPath]
+    ocrProc.running = false
+    ocrProc.running = true
+    if (!silent) {
+      root.showToast(strings.t("status.switchedLiveScreen"))
+    }
+    promptField.forceActiveFocus()
+  }
+
   function restoreHistorySession(sess) {
     if (!sess || !Array.isArray(sess.messages) || sess.messages.length === 0) return
     root.cancelStreaming()
@@ -508,11 +551,35 @@ Item {
     root.messages = sess.messages.slice()
     root.providerLabel = String(sess.providerLabel || "")
     root.answerUsedWebSearch = (sess.webSearch === true)
-    if (!root.selectedText && sess.selectedText) {
-      root.selectedText = String(sess.selectedText)
-    }
+    root.sessionFrameReplaced = false
     root.errorMessage = ""
-    root.showToast(strings.t("status.resumedSession"))
+
+    var savedFrame = String(sess.framePath || sess.thumbPath || "")
+    if (savedFrame) {
+      root.screenshotPath = savedFrame
+      root.imageWidth = Number(sess.frameWidth) || 0
+      root.imageHeight = Number(sess.frameHeight) || 0
+      root.windowClass = String(sess.windowClass || "")
+      root.windowTitle = String(sess.windowTitle || "")
+      root.resumedFrameActive = true
+      root.clearSelection()
+      root.rawOcrWords = []
+      root.ocrWords = []
+      root.rawOcrCodes = []
+      root.ocrCodes = []
+      root.ocrLoading = true
+      ocrProc.command = ["/usr/bin/python3", root.pluginDir + "/scripts/ocr.py", savedFrame]
+      ocrProc.running = false
+      ocrProc.running = true
+      if (sess.selectedText) root.selectedText = String(sess.selectedText)
+      root.showToast(strings.t("status.resumedSession"))
+    } else {
+      root.resumedFrameActive = false
+      if (!root.selectedText && sess.selectedText) {
+        root.selectedText = String(sess.selectedText)
+      }
+      root.showToast(strings.t("status.resumedTextOnly"))
+    }
     Qt.callLater(root.scrollAnswersToBottom)
     promptField.forceActiveFocus()
   }
@@ -889,6 +956,12 @@ Item {
         root.imageHeight = Number(res.imageHeight) || 0
         root.windowClass = String(res.windowClass || "")
         root.windowTitle = String(res.windowTitle || "")
+        root.liveScreenshotPath = root.screenshotPath
+        root.liveImageWidth = root.imageWidth
+        root.liveImageHeight = root.imageHeight
+        root.liveWindowClass = root.windowClass
+        root.liveWindowTitle = root.windowTitle
+        root.resumedFrameActive = false
         root.opened = true
 
         root.ocrLoading = true
@@ -1119,6 +1192,30 @@ Item {
 
     onWidthChanged: if (root.rawOcrWords.length > 0 || root.rawOcrCodes.length > 0) root.remapOcrWords()
     onHeightChanged: if (root.rawOcrWords.length > 0 || root.rawOcrCodes.length > 0) root.remapOcrWords()
+
+    // Durable resumed screenshot backdrop (only visible while viewing a resumed saved frame).
+    Rectangle {
+      anchors.fill: parent
+      visible: root.resumedFrameActive && root.screenshotPath.length > 0
+      color: "#000000"
+
+      Image {
+        anchors.fill: parent
+        source: root.resumedFrameActive && root.screenshotPath ? ("file://" + root.screenshotPath) : ""
+        fillMode: Image.PreserveAspectFit
+        cache: false
+        smooth: true
+        onStatusChanged: {
+          if (status === Image.Ready && implicitWidth > 0 && implicitHeight > 0) {
+            if (root.imageWidth <= 0 || root.imageHeight <= 0) {
+              root.imageWidth = implicitWidth
+              root.imageHeight = implicitHeight
+              if (root.rawOcrWords.length > 0 || root.rawOcrCodes.length > 0) root.remapOcrWords()
+            }
+          }
+        }
+      }
+    }
 
     // Canvas gesture MouseArea (handles lasso drawing, OCR text drag, and
     // interactive crop move/resize handles cleanly without MouseArea conflicts).
@@ -1680,6 +1777,16 @@ Item {
 
         Ui.Button {
           foreground: root.fgColor
+          visible: root.resumedFrameActive && root.liveScreenshotPath.length > 0
+          text: strings.t("action.useLiveScreen")
+          iconText: "󰊓"
+          fontSize: Style.font.bodySmall
+          tooltipText: strings.t("action.useLiveScreenTooltip")
+          onClicked: root.switchToLiveScreen(false)
+        }
+
+        Ui.Button {
+          foreground: root.fgColor
           visible: !!root.latestHistorySession && root.messages.length === 0 && !root.streaming
           text: strings.t("action.resumeLast")
           iconText: "󰋚"
@@ -1901,6 +2008,7 @@ Item {
                   root.messages = []
                   root.errorMessage = ""
                   root.answerUsedWebSearch = false
+                  if (root.resumedFrameActive) root.switchToLiveScreen(true)
                 }
               }
             }
@@ -2564,7 +2672,9 @@ Item {
                   root.webSearchEnabled = !root.webSearchEnabled
                   event.accepted = true
                 } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_H) {
-                  if (root.latestHistorySession) root.restoreHistorySession(root.latestHistorySession)
+                  if (root.latestHistorySession && root.messages.length === 0 && !root.streaming) {
+                    root.restoreHistorySession(root.latestHistorySession)
+                  }
                   event.accepted = true
                 } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_M) {
                   root.toggleVoice()

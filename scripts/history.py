@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Owner-only (0600) local session history store with thumbnail generation and auto-pruning."""
+"""Owner-only (0600) local session history store with TTL expiry, disk cap, and compact frames."""
 
 import argparse
+import glob
 import json
 import os
 import re
@@ -19,18 +20,23 @@ if SCRIPT_DIR not in sys.path:
 from config import CONFIG_PATH, load_config  # noqa: E402
 
 DEFAULT_STATE_DIR = os.path.expanduser("~/.local/state/omarchy/screenlens")
+TMP_PREFIX = "/tmp/omarchy-screenlens-"
+TMP_STALE_SECONDS = 900  # 15 minutes
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 MAX_MESSAGES = 40
 MAX_MSG_CHARS = 16000
 MAX_SELECTED_TEXT = 4000
-MAX_THUMB_DIM = "320x200>"
+MAX_FRAME_DIM = "1440x1440>"
+FRAME_JPEG_QUALITY = "78"
+MAX_TOTAL_FRAME_BYTES = 10 * 1024 * 1024  # Hard 10 MB ceiling on saved frames
 
 
-def state_paths(state_dir: str = DEFAULT_STATE_DIR) -> tuple[str, str, str]:
+def state_paths(state_dir: str = DEFAULT_STATE_DIR) -> tuple[str, str, str, str]:
     root = os.path.abspath(os.path.expanduser(state_dir or DEFAULT_STATE_DIR))
     history_file = os.path.join(root, "history.json")
-    thumbs_dir = os.path.join(root, "thumbs")
-    return root, history_file, thumbs_dir
+    frames_dir = os.path.join(root, "frames")
+    legacy_thumbs_dir = os.path.join(root, "thumbs")
+    return root, history_file, frames_dir, legacy_thumbs_dir
 
 
 def ensure_private_dir(path: str) -> None:
@@ -39,6 +45,18 @@ def ensure_private_dir(path: str) -> None:
         os.chmod(path, 0o700)
     except OSError:
         pass
+
+
+def cleanup_stale_tmp(force_all: bool = False) -> None:
+    now = time.time()
+    patterns = (f"{TMP_PREFIX}*.png", f"{TMP_PREFIX}*.jpg", f"{TMP_PREFIX}*.json", f"{TMP_PREFIX}*.md")
+    for pattern in patterns:
+        for path in glob.glob(pattern):
+            try:
+                if force_all or (now - os.path.getmtime(path) > TMP_STALE_SECONDS):
+                    os.unlink(path)
+            except OSError:
+                pass
 
 
 def load_raw_sessions(history_file: str) -> list[dict]:
@@ -55,10 +73,10 @@ def load_raw_sessions(history_file: str) -> list[dict]:
 
 
 def write_sessions_atomic(sessions: list[dict], state_dir: str = DEFAULT_STATE_DIR) -> None:
-    root, history_file, _ = state_paths(state_dir)
+    root, history_file, _, _ = state_paths(state_dir)
     ensure_private_dir(root)
     payload = {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "updatedAt": int(time.time() * 1000),
         "sessions": sessions,
     }
@@ -102,82 +120,214 @@ def sanitize_messages(raw_messages: object) -> list[dict]:
     return cleaned
 
 
-def generate_thumbnail(source_path: str, session_id: str, thumbs_dir: str) -> str:
+def read_image_dimensions(path: str) -> tuple[int, int]:
+    magick = shutil.which("magick")
+    if not magick or not path or not os.path.isfile(path):
+        return 0, 0
+    try:
+        proc = subprocess.run(
+            [magick, "identify", "-format", "%w %h", path],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if proc.returncode == 0:
+            parts = proc.stdout.strip().split()
+            if len(parts) == 2:
+                return int(parts[0]), int(parts[1])
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return 0, 0
+
+
+def generate_durable_frame(source_path: str, session_id: str, frames_dir: str) -> tuple[str, int, int]:
+    """Create a single compact, metadata-stripped 0600 JPEG used for both thumbnail preview and visual Resume."""
     src = str(source_path or "").strip()
     if not src or not os.path.isfile(src):
-        return ""
-    ensure_private_dir(thumbs_dir)
-    dest = os.path.join(thumbs_dir, f"{session_id}.jpg")
+        return "", 0, 0
+    ensure_private_dir(frames_dir)
+    dest = os.path.join(frames_dir, f"{session_id}.jpg")
+    if os.path.abspath(src) == os.path.abspath(dest):
+        w, h = read_image_dimensions(dest)
+        return dest, w, h
     magick = shutil.which("magick")
-    if magick:
-        tmp_dest = os.path.join(thumbs_dir, f".{session_id}.{os.getpid()}.jpg")
-        try:
-            proc = subprocess.run(
-                [magick, src, "-auto-orient", "-thumbnail", MAX_THUMB_DIM, "-strip", "-quality", "82", tmp_dest],
-                capture_output=True,
-                timeout=10,
-            )
-            if proc.returncode == 0 and os.path.isfile(tmp_dest):
-                os.chmod(tmp_dest, 0o600)
-                os.replace(tmp_dest, dest)
-                os.chmod(dest, 0o600)
-                return dest
-        except (OSError, subprocess.SubprocessError):
-            pass
-        finally:
-            if os.path.exists(tmp_dest):
-                try:
-                    os.unlink(tmp_dest)
-                except OSError:
-                    pass
-    return ""
-
-
-def prune_thumbs(sessions: list[dict], thumbs_dir: str) -> None:
-    if not os.path.isdir(thumbs_dir):
-        return
-    keep = set()
-    for sess in sessions:
-        tp = str(sess.get("thumbPath") or "")
-        if tp:
-            keep.add(os.path.abspath(tp))
-    for name in os.listdir(thumbs_dir):
-        full = os.path.abspath(os.path.join(thumbs_dir, name))
-        if full not in keep:
+    if not magick:
+        return "", 0, 0
+    tmp_dest = os.path.join(frames_dir, f".{session_id}.{os.getpid()}.jpg")
+    try:
+        proc = subprocess.run(
+            [magick, src, "-auto-orient", "-resize", MAX_FRAME_DIM, "-strip", "-quality", FRAME_JPEG_QUALITY, tmp_dest],
+            capture_output=True,
+            timeout=10,
+        )
+        if proc.returncode == 0 and os.path.isfile(tmp_dest):
+            os.chmod(tmp_dest, 0o600)
+            os.replace(tmp_dest, dest)
+            os.chmod(dest, 0o600)
+            w, h = read_image_dimensions(dest)
+            return dest, w, h
+    except (OSError, subprocess.SubprocessError):
+        pass
+    finally:
+        if os.path.exists(tmp_dest):
             try:
-                if os.path.isfile(full):
-                    os.unlink(full)
+                os.unlink(tmp_dest)
             except OSError:
                 pass
+    return "", 0, 0
 
 
-def history_settings(config_path: str = CONFIG_PATH) -> tuple[bool, int]:
+def history_settings(config_path: str = CONFIG_PATH) -> dict:
     cfg = load_config(config_path)
     enabled = bool(cfg.get("historyEnabled", True))
     try:
         max_sessions = int(cfg.get("historyMaxSessions", 15))
     except (TypeError, ValueError):
         max_sessions = 15
-    return enabled, max(1, min(100, max_sessions))
+    try:
+        retention_days = int(cfg.get("historyRetentionDays", 1))
+    except (TypeError, ValueError):
+        retention_days = 1
+    save_images = bool(cfg.get("historySaveImages", True))
+    return {
+        "enabled": enabled,
+        "maxSessions": max(1, min(100, max_sessions)),
+        "retentionDays": max(1, min(90, retention_days)),
+        "saveImages": save_images,
+    }
+
+
+def _session_frame_path(sess: dict) -> str:
+    fp = str(sess.get("framePath") or sess.get("thumbPath") or "").strip()
+    return fp if (fp and os.path.isfile(fp)) else ""
+
+
+def prune_media_files(sessions: list[dict], frames_dir: str, legacy_thumbs_dir: str) -> None:
+    keep = set()
+    for sess in sessions:
+        fp = str(sess.get("framePath") or "").strip()
+        if fp:
+            keep.add(os.path.abspath(fp))
+    for directory in (frames_dir, legacy_thumbs_dir):
+        if not os.path.isdir(directory):
+            continue
+        for name in os.listdir(directory):
+            full = os.path.abspath(os.path.join(directory, name))
+            if full not in keep:
+                try:
+                    if os.path.isfile(full):
+                        os.unlink(full)
+                except OSError:
+                    pass
+
+
+def enforce_policies(
+    sessions: list[dict],
+    settings: dict,
+    frames_dir: str,
+    legacy_thumbs_dir: str,
+    now_ms: int | None = None,
+    max_frame_bytes: int = MAX_TOTAL_FRAME_BYTES,
+) -> tuple[list[dict], bool]:
+    """Apply time-based TTL expiry, count cap, saveImages opt-out, and hard disk ceiling."""
+    now = int(time.time() * 1000) if now_ms is None else int(now_ms)
+    cutoff_ms = now - int(settings["retentionDays"]) * 86400 * 1000
+    save_images = bool(settings["saveImages"])
+    max_sessions = int(settings["maxSessions"])
+
+    changed = False
+    ordered = sorted(sessions, key=lambda s: int(s.get("updatedAt") or 0), reverse=True)
+    kept: list[dict] = []
+
+    for sess in ordered:
+        ts = int(sess.get("updatedAt") or sess.get("createdAt") or 0)
+        if ts > 0 and ts < cutoff_ms:
+            changed = True
+            continue
+        if len(kept) >= max_sessions:
+            changed = True
+            continue
+        item = dict(sess)
+        # Normalize legacy thumbPath -> framePath and drop missing/disabled frames.
+        fp = _session_frame_path(item)
+        if not save_images:
+            if fp or item.get("framePath") or item.get("thumbPath"):
+                changed = True
+            item["framePath"] = ""
+            item["thumbPath"] = ""
+            item["frameWidth"] = 0
+            item["frameHeight"] = 0
+        else:
+            if fp != str(item.get("framePath") or "") or fp != str(item.get("thumbPath") or ""):
+                changed = True
+            item["framePath"] = fp
+            item["thumbPath"] = fp
+        kept.append(item)
+
+    # Enforce hard disk ceiling across saved frames (keep newest frames, drop oldest first).
+    if save_images and max_frame_bytes > 0:
+        running_bytes = 0
+        for item in kept:
+            fp = str(item.get("framePath") or "")
+            if not fp or not os.path.isfile(fp):
+                continue
+            try:
+                sz = os.path.getsize(fp)
+            except OSError:
+                sz = 0
+            if running_bytes + sz > max_frame_bytes:
+                item["framePath"] = ""
+                item["thumbPath"] = ""
+                item["frameWidth"] = 0
+                item["frameHeight"] = 0
+                changed = True
+            else:
+                running_bytes += sz
+
+    prune_media_files(kept, frames_dir, legacy_thumbs_dir)
+    return kept, changed
+
+
+def compute_storage_bytes(state_dir: str = DEFAULT_STATE_DIR) -> int:
+    _, history_file, frames_dir, legacy_thumbs_dir = state_paths(state_dir)
+    total = 0
+    if os.path.isfile(history_file):
+        try:
+            total += os.path.getsize(history_file)
+        except OSError:
+            pass
+    for directory in (frames_dir, legacy_thumbs_dir):
+        if not os.path.isdir(directory):
+            continue
+        for name in os.listdir(directory):
+            full = os.path.join(directory, name)
+            try:
+                if os.path.isfile(full):
+                    total += os.path.getsize(full)
+            except OSError:
+                pass
+    return total
 
 
 def save_session(
     payload: dict,
     state_dir: str = DEFAULT_STATE_DIR,
     config_path: str = CONFIG_PATH,
+    now_ms: int | None = None,
+    max_frame_bytes: int = MAX_TOTAL_FRAME_BYTES,
 ) -> dict:
-    enabled, max_sessions = history_settings(config_path)
-    if not enabled:
+    settings = history_settings(config_path)
+    if not settings["enabled"]:
         return {"ok": True, "skipped": True, "reason": "history_disabled"}
 
     messages = sanitize_messages(payload.get("messages"))
     if not messages:
         return {"ok": True, "skipped": True, "reason": "empty_messages"}
 
-    _, history_file, thumbs_dir = state_paths(state_dir)
+    _, history_file, frames_dir, legacy_thumbs_dir = state_paths(state_dir)
     sessions = load_raw_sessions(history_file)
     sid = sanitize_session_id(payload.get("id"))
-    now_ms = int(time.time() * 1000)
+    ts_now = int(time.time() * 1000) if now_ms is None else int(now_ms)
 
     existing = None
     remaining: list[dict] = []
@@ -187,37 +337,60 @@ def save_session(
         else:
             remaining.append(item)
 
-    created_at = int(existing.get("createdAt") or now_ms) if existing else now_ms
-    thumb_path = str(existing.get("thumbPath") or "") if existing else ""
-    image_path = str(payload.get("imagePath") or "").strip()
-    if image_path and not os.path.isfile(image_path):
-        image_path = ""
+    created_at = int(existing.get("createdAt") or ts_now) if existing else ts_now
+    existing_frame = _session_frame_path(existing) if existing else ""
+    existing_fw = int(existing.get("frameWidth") or 0) if existing else 0
+    existing_fh = int(existing.get("frameHeight") or 0) if existing else 0
+    replace_frame = bool(payload.get("replaceFrame", False))
 
-    # Generate thumbnail once per session (or refresh if missing on disk).
-    if (not thumb_path or not os.path.isfile(thumb_path)) and image_path:
-        thumb_path = generate_thumbnail(image_path, sid, thumbs_dir)
+    src_image = str(payload.get("imagePath") or "").strip()
+    frame_path = ""
+    frame_w = 0
+    frame_h = 0
+
+    if settings["saveImages"]:
+        if existing_frame and not replace_frame:
+            frame_path = existing_frame
+            frame_w = existing_fw
+            frame_h = existing_fh
+            if (frame_w <= 0 or frame_h <= 0) and os.path.isfile(frame_path):
+                frame_w, frame_h = read_image_dimensions(frame_path)
+        elif src_image and os.path.isfile(src_image):
+            frame_path, frame_w, frame_h = generate_durable_frame(src_image, sid, frames_dir)
 
     entry = {
         "id": sid,
         "createdAt": created_at,
-        "updatedAt": now_ms,
-        "windowClass": str(payload.get("windowClass") or "")[:120],
-        "windowTitle": str(payload.get("windowTitle") or "")[:240],
+        "updatedAt": ts_now,
+        "windowClass": str(payload.get("windowClass") or (existing.get("windowClass") if existing else "") or "")[:120],
+        "windowTitle": str(payload.get("windowTitle") or (existing.get("windowTitle") if existing else "") or "")[:240],
         "providerLabel": str(payload.get("providerLabel") or "")[:120],
         "webSearch": bool(payload.get("webSearch", False)),
         "selectedText": str(payload.get("selectedText") or "")[:MAX_SELECTED_TEXT],
-        "imagePath": image_path,
-        "thumbPath": thumb_path,
+        "framePath": frame_path,
+        "thumbPath": frame_path,
+        "frameWidth": frame_w,
+        "frameHeight": frame_h,
         "messages": messages,
     }
 
-    updated = [entry] + remaining
-    updated.sort(key=lambda s: int(s.get("updatedAt") or 0), reverse=True)
-    updated = updated[:max_sessions]
-
+    updated, _ = enforce_policies(
+        [entry] + remaining,
+        settings,
+        frames_dir,
+        legacy_thumbs_dir,
+        now_ms=ts_now,
+        max_frame_bytes=max_frame_bytes,
+    )
     write_sessions_atomic(updated, state_dir=state_dir)
-    prune_thumbs(updated, thumbs_dir)
-    return {"ok": True, "session": entry, "count": len(updated)}
+    cleanup_stale_tmp(force_all=False)
+    saved_entry = next((s for s in updated if s.get("id") == sid), entry)
+    return {
+        "ok": True,
+        "session": saved_entry,
+        "count": len(updated),
+        "storageBytes": compute_storage_bytes(state_dir),
+    }
 
 
 def matches_query(session: dict, query: str) -> bool:
@@ -236,24 +409,39 @@ def matches_query(session: dict, query: str) -> bool:
     return q in "\n".join(hay_parts).lower()
 
 
+def _load_and_auto_prune(
+    state_dir: str,
+    config_path: str,
+    now_ms: int | None = None,
+) -> tuple[list[dict], dict]:
+    settings = history_settings(config_path)
+    _, history_file, frames_dir, legacy_thumbs_dir = state_paths(state_dir)
+    raw = load_raw_sessions(history_file)
+    kept, changed = enforce_policies(raw, settings, frames_dir, legacy_thumbs_dir, now_ms=now_ms)
+    if changed and os.path.exists(history_file):
+        write_sessions_atomic(kept, state_dir=state_dir)
+    return kept, settings
+
+
 def list_sessions(
     state_dir: str = DEFAULT_STATE_DIR,
     config_path: str = CONFIG_PATH,
     query: str = "",
     limit: int = 0,
+    now_ms: int | None = None,
 ) -> dict:
-    enabled, max_sessions = history_settings(config_path)
-    _, history_file, _ = state_paths(state_dir)
-    sessions = load_raw_sessions(history_file)
-    sessions.sort(key=lambda s: int(s.get("updatedAt") or 0), reverse=True)
+    sessions, settings = _load_and_auto_prune(state_dir, config_path, now_ms=now_ms)
     if query:
         sessions = [s for s in sessions if matches_query(s, query)]
     if limit and limit > 0:
         sessions = sessions[:limit]
     return {
         "ok": True,
-        "enabled": enabled,
-        "maxSessions": max_sessions,
+        "enabled": settings["enabled"],
+        "maxSessions": settings["maxSessions"],
+        "retentionDays": settings["retentionDays"],
+        "saveImages": settings["saveImages"],
+        "storageBytes": compute_storage_bytes(state_dir),
         "sessions": sessions,
     }
 
@@ -262,29 +450,27 @@ def get_session(
     session_id: str,
     state_dir: str = DEFAULT_STATE_DIR,
     config_path: str = CONFIG_PATH,
+    now_ms: int | None = None,
 ) -> dict:
-    enabled, _ = history_settings(config_path)
     sid = str(session_id or "").strip()
     if not sid or not SESSION_ID_RE.match(sid):
         return {"ok": False, "error": "Invalid session id"}
-    _, history_file, _ = state_paths(state_dir)
-    for sess in load_raw_sessions(history_file):
+    sessions, settings = _load_and_auto_prune(state_dir, config_path, now_ms=now_ms)
+    for sess in sessions:
         if str(sess.get("id") or "") == sid:
-            return {"ok": True, "enabled": enabled, "session": sess}
+            return {"ok": True, "enabled": settings["enabled"], "session": sess}
     return {"ok": False, "error": "Session not found"}
 
 
 def latest_session(
     state_dir: str = DEFAULT_STATE_DIR,
     config_path: str = CONFIG_PATH,
+    now_ms: int | None = None,
 ) -> dict:
-    enabled, _ = history_settings(config_path)
-    _, history_file, _ = state_paths(state_dir)
-    sessions = load_raw_sessions(history_file)
-    sessions.sort(key=lambda s: int(s.get("updatedAt") or 0), reverse=True)
+    sessions, settings = _load_and_auto_prune(state_dir, config_path, now_ms=now_ms)
     return {
         "ok": True,
-        "enabled": enabled,
+        "enabled": settings["enabled"],
         "session": sessions[0] if sessions else None,
     }
 
@@ -296,37 +482,55 @@ def delete_session(
     sid = str(session_id or "").strip()
     if not sid or not SESSION_ID_RE.match(sid):
         return {"ok": False, "error": "Invalid session id"}
-    _, history_file, thumbs_dir = state_paths(state_dir)
+    _, history_file, frames_dir, legacy_thumbs_dir = state_paths(state_dir)
     sessions = load_raw_sessions(history_file)
     kept = [s for s in sessions if str(s.get("id") or "") != sid]
     deleted = len(kept) != len(sessions)
     if deleted:
         write_sessions_atomic(kept, state_dir=state_dir)
-        prune_thumbs(kept, thumbs_dir)
-    return {"ok": True, "deleted": deleted, "remaining": len(kept)}
+        prune_media_files(kept, frames_dir, legacy_thumbs_dir)
+    return {
+        "ok": True,
+        "deleted": deleted,
+        "remaining": len(kept),
+        "storageBytes": compute_storage_bytes(state_dir),
+    }
 
 
-def clear_history(state_dir: str = DEFAULT_STATE_DIR) -> dict:
-    _, history_file, thumbs_dir = state_paths(state_dir)
+def clear_history(state_dir: str = DEFAULT_STATE_DIR, purge_tmp: bool = True) -> dict:
+    _, history_file, frames_dir, legacy_thumbs_dir = state_paths(state_dir)
     prev = load_raw_sessions(history_file)
     write_sessions_atomic([], state_dir=state_dir)
-    prune_thumbs([], thumbs_dir)
-    return {"ok": True, "cleared": len(prev)}
+    prune_media_files([], frames_dir, legacy_thumbs_dir)
+    if purge_tmp:
+        cleanup_stale_tmp(force_all=False)
+    return {
+        "ok": True,
+        "cleared": len(prev),
+        "storageBytes": compute_storage_bytes(state_dir),
+    }
 
 
 def prune_history(
     state_dir: str = DEFAULT_STATE_DIR,
     config_path: str = CONFIG_PATH,
+    now_ms: int | None = None,
 ) -> dict:
-    _, max_sessions = history_settings(config_path)
-    _, history_file, thumbs_dir = state_paths(state_dir)
-    sessions = load_raw_sessions(history_file)
-    sessions.sort(key=lambda s: int(s.get("updatedAt") or 0), reverse=True)
-    kept = sessions[:max_sessions]
+    settings = history_settings(config_path)
+    _, history_file, frames_dir, legacy_thumbs_dir = state_paths(state_dir)
+    raw = load_raw_sessions(history_file)
+    kept, _ = enforce_policies(raw, settings, frames_dir, legacy_thumbs_dir, now_ms=now_ms)
     if os.path.exists(history_file) or kept:
         write_sessions_atomic(kept, state_dir=state_dir)
-    prune_thumbs(kept, thumbs_dir)
-    return {"ok": True, "remaining": len(kept), "maxSessions": max_sessions}
+    cleanup_stale_tmp(force_all=False)
+    return {
+        "ok": True,
+        "remaining": len(kept),
+        "maxSessions": settings["maxSessions"],
+        "retentionDays": settings["retentionDays"],
+        "saveImages": settings["saveImages"],
+        "storageBytes": compute_storage_bytes(state_dir),
+    }
 
 
 def main() -> int:

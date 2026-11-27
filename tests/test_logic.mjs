@@ -215,6 +215,10 @@ assert.equal(sandbox.formatRelativeTime(1000000, 1020000), "Just now")
 assert.equal(sandbox.formatRelativeTime(1000000, 1000000 + 5 * 60 * 1000), "5m ago")
 assert.equal(sandbox.formatRelativeTime(1000000, 1000000 + 3 * 3600 * 1000), "3h ago")
 assert.equal(sandbox.formatRelativeTime(1000000, 1000000 + 26 * 3600 * 1000), "Yesterday")
+assert.equal(sandbox.formatBytes(0), "0 B")
+assert.equal(sandbox.formatBytes(840), "840 B")
+assert.equal(sandbox.formatBytes(145000), "142 KB")
+assert.equal(sandbox.formatBytes(1887436), "1.8 MB")
 
 // 8. Contrast ink helper and PlainText-safe answer block parser
 assert.equal(sandbox.inkOn("#f5f6fa"), "#101315")

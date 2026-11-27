@@ -126,6 +126,8 @@ DEFAULT_CONFIG = {
     "autoCheckUpdates": True,
     "historyEnabled": True,
     "historyMaxSessions": 15,
+    "historyRetentionDays": 1,
+    "historySaveImages": True,
     "translateLanguage": "English",
     "ocrLanguages": ["eng"],
     "defaultProvider": "auto",
@@ -211,6 +213,12 @@ def normalize_config(raw: dict | None) -> dict:
     except (TypeError, ValueError):
         hist_max = 15
     cfg["historyMaxSessions"] = max(1, min(100, hist_max))
+    try:
+        ret_days = int(cfg.get("historyRetentionDays") or 1)
+    except (TypeError, ValueError):
+        ret_days = 1
+    cfg["historyRetentionDays"] = max(1, min(90, ret_days))
+    cfg["historySaveImages"] = bool(cfg.get("historySaveImages", True))
     cfg["voiceAutoSubmit"] = bool(cfg.get("voiceAutoSubmit", True))
     cfg["voiceKeybind"] = str(cfg.get("voiceKeybind") or "").strip()
 

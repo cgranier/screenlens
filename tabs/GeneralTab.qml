@@ -434,6 +434,84 @@ Column {
 
       Item {
         width: parent.width
+        implicitHeight: Math.max(Style.space(38), historySaveImgLabel.implicitHeight + Style.space(14))
+
+        SLRoot.PlainText {
+          id: historySaveImgLabel
+          anchors.left: parent.left
+          anchors.right: historySaveImgSwitch.left
+          anchors.leftMargin: Style.space(10)
+          anchors.rightMargin: Style.space(10)
+          anchors.verticalCenter: parent.verticalCenter
+          text: tab.strings.t("settings.historySaveImages")
+          color: tab.panel.secondaryInk
+          font.family: tab.panel.uiFont
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
+        }
+
+        Ui.ToggleSwitch {
+          id: historySaveImgSwitch
+          anchors.right: parent.right
+          anchors.rightMargin: Style.space(10)
+          anchors.verticalCenter: parent.verticalCenter
+          checked: tab.panel.cfgVal("historySaveImages", true) !== false
+          foreground: tab.panel.fgColor
+          accent: tab.panel.accentColor
+          onToggled: tab.panel.patchConfig({
+            historySaveImages: !(tab.panel.cfgVal("historySaveImages", true) !== false)
+          })
+        }
+      }
+
+      SLUi.CardDivider { width: parent.width; dividerColor: tab.panel.rowDivider }
+
+      Item {
+        width: parent.width
+        implicitHeight: Style.space(42)
+
+        SLRoot.PlainText {
+          anchors.left: parent.left
+          anchors.leftMargin: Style.space(10)
+          anchors.verticalCenter: parent.verticalCenter
+          text: tab.strings.t("settings.historyRetention")
+          color: tab.panel.fgColor
+          font.family: tab.panel.uiFont
+          font.pixelSize: Style.font.bodySmall
+        }
+
+        Row {
+          anchors.right: parent.right
+          anchors.rightMargin: Style.space(10)
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.space(4)
+
+          Repeater {
+            model: [
+              { days: 1,  label: "24h" },
+              { days: 3,  label: "3d" },
+              { days: 7,  label: "7d" },
+              { days: 30, label: "30d" }
+            ]
+            delegate: SLUi.PillOption {
+              required property var modelData
+              label: modelData.label
+              fontSize: Style.font.caption
+              fgColor: tab.panel.fgColor
+              accentColor: tab.panel.accentColor
+              cornerRadius: tab.panel.cornerRadius
+              uiFont: tab.panel.uiFont
+              active: Number(tab.panel.cfgVal("historyRetentionDays", 1)) === modelData.days
+              onClicked: tab.panel.patchConfig({ historyRetentionDays: modelData.days })
+            }
+          }
+        }
+      }
+
+      SLUi.CardDivider { width: parent.width; dividerColor: tab.panel.rowDivider }
+
+      Item {
+        width: parent.width
         implicitHeight: Style.space(42)
 
         SLRoot.PlainText {

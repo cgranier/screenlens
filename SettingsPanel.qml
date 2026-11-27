@@ -81,6 +81,7 @@ Ui.Panel {
 
   // Session History tab state
   property var historySessions: []
+  property int historyStorageBytes: 0
   property bool historyLoading: false
   property string historyQuery: ""
   property string selectedHistoryId: ""
@@ -184,7 +185,7 @@ Ui.Panel {
   function handoffHistorySession(sess) {
     if (!sess) return
     var msgs = Array.isArray(sess.messages) ? sess.messages : []
-    var imgPath = String(sess.imagePath || sess.thumbPath || "")
+    var imgPath = String(sess.framePath || sess.thumbPath || "")
     Util.execArgv([
       "/usr/bin/python3",
       root.pluginDir + "/scripts/actions.py",
@@ -632,7 +633,9 @@ Ui.Panel {
         if (res && res.ok && res.config) {
           root.config = res.config
           root.setStatus(strings.t("settings.saved"), false)
-          if (root.pendingPatchJson.indexOf("historyMaxSessions") !== -1) {
+          if (root.pendingPatchJson.indexOf("historyMaxSessions") !== -1
+              || root.pendingPatchJson.indexOf("historyRetentionDays") !== -1
+              || root.pendingPatchJson.indexOf("historySaveImages") !== -1) {
             root.pruneHistory()
           }
         } else {
@@ -793,6 +796,7 @@ Ui.Panel {
         try { res = JSON.parse(text) } catch (e) { res = null }
         if (res && res.ok && Array.isArray(res.sessions)) {
           root.historySessions = res.sessions
+          root.historyStorageBytes = Number(res.storageBytes) || 0
         }
       }
     }
@@ -825,6 +829,7 @@ Ui.Panel {
         if (res && res.ok) {
           root.selectedHistoryId = ""
           root.historySessions = []
+          root.historyStorageBytes = Number(res.storageBytes) || 0
           root.setStatus(strings.t("settings.historyCleared"), false)
         }
       }
