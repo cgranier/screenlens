@@ -1976,12 +1976,12 @@ Item {
             required property int index
             radius: Math.min(4, root.cornerRadius)
             color: smartChipHover.hovered
-              ? Util.alpha(root.accentColor, 0.28)
-              : Util.alpha(root.accentColor, 0.16)
+              ? Qt.lighter(root.accentColor, 1.08)
+              : root.accentColor
             border.width: 1
             border.color: smartChipHover.hovered
-              ? root.accentColor
-              : Util.alpha(root.accentColor, 0.62)
+              ? Util.alpha(root.onAccentInk, 0.35)
+              : Util.alpha(root.onAccentInk, 0.18)
             implicitWidth: smartChipRow.implicitWidth + Style.space(18)
             implicitHeight: Style.space(28)
 
@@ -1995,7 +1995,7 @@ Item {
               PlainText {
                 anchors.verticalCenter: parent.verticalCenter
                 text: modelData.icon
-                color: root.accentColor
+                color: root.onAccentInk
                 font.family: root.uiFont
                 font.pixelSize: Style.font.body
               }
@@ -2003,7 +2003,7 @@ Item {
               PlainText {
                 anchors.verticalCenter: parent.verticalCenter
                 text: strings.t(modelData.labelKey)
-                color: root.fgColor
+                color: root.onAccentInk
                 font.family: root.uiFont
                 font.pixelSize: Style.font.bodySmall
                 font.bold: true
@@ -2012,7 +2012,7 @@ Item {
               SLUi.KeyCap {
                 anchors.verticalCenter: parent.verticalCenter
                 label: "Alt+" + (index + 5)
-                fgColor: root.fgColor
+                fgColor: root.onAccentInk
                 cornerRadius: root.cornerRadius
                 uiFont: root.uiFont
               }
