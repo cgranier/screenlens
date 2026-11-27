@@ -188,7 +188,7 @@ Column {
           spacing: Style.space(4)
 
           SLUi.PillOption {
-            icon: "󰒅"
+            icon: "󰴲"
             label: tab.strings.t("mode.lasso")
             fgColor: tab.panel.fgColor
             accentColor: tab.panel.accentColor
@@ -196,6 +196,17 @@ Column {
             uiFont: tab.panel.uiFont
             active: tab.panel.cfgVal("defaultMode", "lasso") === "lasso"
             onClicked: tab.panel.patchConfig({ defaultMode: "lasso" })
+          }
+
+          SLUi.PillOption {
+            icon: "󰒉"
+            label: tab.strings.t("mode.box")
+            fgColor: tab.panel.fgColor
+            accentColor: tab.panel.accentColor
+            cornerRadius: tab.panel.cornerRadius
+            uiFont: tab.panel.uiFont
+            active: tab.panel.cfgVal("defaultMode", "lasso") === "box"
+            onClicked: tab.panel.patchConfig({ defaultMode: "box" })
           }
 
           SLUi.PillOption {

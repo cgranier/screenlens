@@ -193,7 +193,7 @@ def normalize_config(raw: dict | None) -> dict:
     # Clamp & validate enum/numeric fields.
     if cfg["theme"] not in ("system", "dark", "light"):
         cfg["theme"] = "system"
-    if cfg["defaultMode"] not in ("lasso", "text"):
+    if cfg["defaultMode"] not in ("lasso", "box", "text"):
         cfg["defaultMode"] = "lasso"
     try:
         dim = int(cfg.get("maxImageDim") or 1920)
