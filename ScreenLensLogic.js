@@ -59,6 +59,95 @@ function computeSelectionRect(points, overlayWidth, overlayHeight, padding) {
   return { x: x, y: y, w: w, h: h }
 }
 
+// Hit-tests a locked crop rectangle for corner resize handles ("nw","ne","sw","se"),
+// edge resize handles ("n","s","e","w"), interior drag ("move"), or outside ("").
+function hitTestCropHandle(rect, px, py, handleMargin) {
+  if (!rect || !(rect.w > 0) || !(rect.h > 0)) return ""
+  if (!isFinite(px) || !isFinite(py)) return ""
+
+  var margin = typeof handleMargin === "number" ? handleMargin : 12
+  var cornerTol = Math.max(8, Math.min(margin, Math.max(8, Math.min(rect.w, rect.h) * 0.4)))
+  var edgeTol = Math.max(6, Math.min(9, cornerTol))
+
+  var left = rect.x
+  var top = rect.y
+  var right = rect.x + rect.w
+  var bottom = rect.y + rect.h
+
+  // 1. Corner handles take priority over edges and interior.
+  if (Math.abs(px - left) <= cornerTol && Math.abs(py - top) <= cornerTol) return "nw"
+  if (Math.abs(px - right) <= cornerTol && Math.abs(py - top) <= cornerTol) return "ne"
+  if (Math.abs(px - left) <= cornerTol && Math.abs(py - bottom) <= cornerTol) return "sw"
+  if (Math.abs(px - right) <= cornerTol && Math.abs(py - bottom) <= cornerTol) return "se"
+
+  // 2. Edge handles along the border segments.
+  if (px >= left - edgeTol && px <= right + edgeTol) {
+    if (Math.abs(py - top) <= edgeTol) return "n"
+    if (Math.abs(py - bottom) <= edgeTol) return "s"
+  }
+  if (py >= top - edgeTol && py <= bottom + edgeTol) {
+    if (Math.abs(px - left) <= edgeTol) return "w"
+    if (Math.abs(px - right) <= edgeTol) return "e"
+  }
+
+  // 3. Interior drag to reposition.
+  if (px >= left && px <= right && py >= top && py <= bottom) return "move"
+  return ""
+}
+
+// Hit-tests an array of pinned crop regions from topmost (last) to bottommost.
+function hitTestRegions(regions, px, py, handleMargin) {
+  if (!Array.isArray(regions) || regions.length === 0) return { index: -1, handle: "" }
+  for (var i = regions.length - 1; i >= 0; i--) {
+    var h = hitTestCropHandle(regions[i], px, py, handleMargin)
+    if (h) return { index: i, handle: h }
+  }
+  return { index: -1, handle: "" }
+}
+
+// Applies a move or resize drag delta to startRect, clamped cleanly inside
+// [0..overlayWidth, 0..overlayHeight] with minimum logical size minSize (default 16).
+function applyCropDrag(startRect, handle, dx, dy, overlayWidth, overlayHeight, minSize) {
+  if (!startRect || !handle) return startRect
+  if (!(overlayWidth > 0) || !(overlayHeight > 0)) return startRect
+
+  var minDim = typeof minSize === "number" ? Math.max(8, minSize) : 16
+  var maxW = Math.min(minDim, overlayWidth)
+  var maxH = Math.min(minDim, overlayHeight)
+
+  if (handle === "move") {
+    var w = Math.min(startRect.w, overlayWidth)
+    var h = Math.min(startRect.h, overlayHeight)
+    var nx = Math.round(clamp(startRect.x + dx, 0, Math.max(0, overlayWidth - w)))
+    var ny = Math.round(clamp(startRect.y + dy, 0, Math.max(0, overlayHeight - h)))
+    return { x: nx, y: ny, w: Math.round(w), h: Math.round(h) }
+  }
+
+  var left = startRect.x
+  var top = startRect.y
+  var right = startRect.x + startRect.w
+  var bottom = startRect.y + startRect.h
+
+  if (handle.indexOf("w") !== -1) {
+    left = clamp(startRect.x + dx, 0, right - maxW)
+  }
+  if (handle.indexOf("e") !== -1) {
+    right = clamp(startRect.x + startRect.w + dx, left + maxW, overlayWidth)
+  }
+  if (handle.indexOf("n") !== -1) {
+    top = clamp(startRect.y + dy, 0, bottom - maxH)
+  }
+  if (handle.indexOf("s") !== -1) {
+    bottom = clamp(startRect.y + startRect.h + dy, top + maxH, overlayHeight)
+  }
+
+  var rx = Math.round(left)
+  var ry = Math.round(top)
+  var rw = Math.max(Math.round(maxW), Math.round(right - left))
+  var rh = Math.max(Math.round(maxH), Math.round(bottom - top))
+  return { x: rx, y: ry, w: rw, h: rh }
+}
+
 // Maps a logical overlay rectangle into physical screenshot pixels for cropping.
 function logicalToImageRect(rect, overlayWidth, overlayHeight, imageWidth, imageHeight) {
   if (!rect) return null

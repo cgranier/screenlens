@@ -4,6 +4,7 @@
   "mode.text": "Select Text",
   "mode.fullScreen": "Full Screen",
   "hint.lasso": "Drag to circle or box anything, Tab for text selection, or start typing",
+  "hint.lassoLocked": "Drag handles or box to adjust · Hold Shift + drag to pin another region",
   "hint.text": "Drag across detected text to highlight, Ctrl+C to copy, or ask below",
   "hint.ocrLoading": "Scanning text on screen...",
   "hint.ocrReady": {
@@ -13,6 +14,10 @@
   "hint.ocrEmpty": "No selectable text detected",
   "context.fullScreen": "Full screen",
   "context.region": "Region (%1×%2)",
+  "context.multiRegions": {
+    "one": "%1 region pinned",
+    "other": "%1 regions pinned"
+  },
   "context.selectedText": "Selected text (%1 chars)",
   "context.clear": "Clear selection",
   "chip.explain": "Explain",
@@ -42,6 +47,7 @@
   "status.extractingText": "Extracting text...",
   "status.copiedToClipboard": "Copied to clipboard",
   "status.noTextFound": "No text found in selection",
+  "status.maxRegions": "Up to %1 regions can be pinned at once",
   "status.handoffSent": "Handed off to default agent",
   "error.captureFailed": "Could not capture screen: %1",
   "error.voiceFailed": "Superwhisper error: %1",

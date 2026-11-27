@@ -114,7 +114,7 @@ def resolve_provider(config: dict, env: dict | None = None, task: str = "") -> d
     return {"provider": "agent", "model": explicit_model or str(agent_cfg.get("model") or ""), "cli": str(agent_cfg.get("cli") or "default")}
 
 
-def prepare_image(image_path: str, crop: dict | None, max_dim: int = 1920) -> tuple[bytes, str, str]:
+def prepare_image(image_path: str, crop: dict | None, max_dim: int = 1920, tag: str = "") -> tuple[bytes, str, str]:
     """Return (image_bytes, mime_type, saved_path_for_agent)."""
     if not image_path or not os.path.isfile(image_path):
         return b"", "", ""
@@ -131,7 +131,8 @@ def prepare_image(image_path: str, crop: dict | None, max_dim: int = 1920) -> tu
         y = max(0, int(crop["y"]))
         w = max(1, int(crop["w"]))
         h = max(1, int(crop["h"]))
-        saved_path = f"/tmp/omarchy-screenlens-crop-{os.getuid()}-{int(time.time() * 1000)}-{os.getpid()}.png"
+        suffix = f"-{tag}" if tag else ""
+        saved_path = f"/tmp/omarchy-screenlens-crop-{os.getuid()}-{int(time.time() * 1000)}-{os.getpid()}{suffix}.png"
         fd = os.open(saved_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         os.close(fd)
         cmd = ["magick", image_path, "-crop", f"{w}x{h}+{x}+{y}", "+repage"]
@@ -154,7 +155,34 @@ def prepare_image(image_path: str, crop: dict | None, max_dim: int = 1920) -> tu
         return f.read(), "image/png", saved_path
 
 
-def compose_user_text(prompt: str, selected_text: str, window_info: dict | None, has_crop: bool) -> str:
+def prepare_images(
+    image_path: str,
+    crops: list[dict] | None,
+    max_dim: int = 1920,
+) -> list[tuple[bytes, str, str]]:
+    """Prepare one or more cropped images (up to 6) or a single full-screen image."""
+    if not image_path or not os.path.isfile(image_path):
+        return []
+    valid_crops = [
+        c for c in (crops or [])
+        if isinstance(c, dict) and int(c.get("w", 0)) > 0 and int(c.get("h", 0)) > 0
+    ][:6]
+    if valid_crops:
+        out = []
+        for idx, c in enumerate(valid_crops):
+            out.append(prepare_image(image_path, c, max_dim=max_dim, tag=f"r{idx + 1}"))
+        return out
+    item = prepare_image(image_path, None, max_dim=max_dim)
+    return [item] if item[0] else []
+
+
+def compose_user_text(
+    prompt: str,
+    selected_text: str,
+    window_info: dict | None,
+    has_crop: bool,
+    crop_count: int = 0,
+) -> str:
     parts = []
     if isinstance(window_info, dict):
         cls = str(window_info.get("class") or "").strip()
@@ -162,12 +190,26 @@ def compose_user_text(prompt: str, selected_text: str, window_info: dict | None,
         if cls or title:
             label = f"{cls} — {title}" if cls and title else (cls or title)
             parts.append(f"[Active window: {label}]")
-    if has_crop:
+    if crop_count > 1:
+        parts.append(
+            f"[Attached images: {crop_count} pinned screen regions (#1 to #{crop_count}) selected by the user for comparison]"
+        )
+    elif has_crop or crop_count == 1:
         parts.append("[Attached image: cropped region selected by the user]")
     if selected_text:
         parts.append(f"[User highlighted text on screen:]\n{selected_text[:6000]}")
     parts.append(prompt.strip())
     return "\n\n".join(parts)
+
+
+def _collect_images(image_b64: str, mime: str, extra_images: list[tuple[str, str]] | None) -> list[tuple[str, str]]:
+    imgs: list[tuple[str, str]] = []
+    if image_b64:
+        imgs.append((image_b64, mime))
+    for b64, m in extra_images or []:
+        if b64:
+            imgs.append((b64, m or mime))
+    return imgs
 
 
 def build_gemini_payload(
@@ -176,7 +218,18 @@ def build_gemini_payload(
     mime: str,
     history: list[dict],
     web_search: bool = False,
+    extra_images: list[tuple[str, str]] | None = None,
 ) -> dict:
+    images = _collect_images(image_b64, mime, extra_images)
+
+    def _image_parts() -> list[dict]:
+        out = []
+        for idx, (b64, m) in enumerate(images):
+            if len(images) > 1:
+                out.append({"text": f"[Region #{idx + 1}]"})
+            out.append({"inline_data": {"mime_type": m, "data": b64}})
+        return out
+
     contents = []
     for idx, turn in enumerate(history[-MAX_HISTORY_TURNS:]):
         role = "model" if turn.get("role") == "assistant" else "user"
@@ -184,13 +237,13 @@ def build_gemini_payload(
         if not text:
             continue
         parts = [{"text": text}]
-        if idx == 0 and role == "user" and image_b64:
-            parts.insert(0, {"inline_data": {"mime_type": mime, "data": image_b64}})
+        if idx == 0 and role == "user" and images:
+            parts = _image_parts() + parts
         contents.append({"role": role, "parts": parts})
 
     current_parts = [{"text": user_text}]
-    if not contents and image_b64:
-        current_parts.insert(0, {"inline_data": {"mime_type": mime, "data": image_b64}})
+    if not contents and images:
+        current_parts = _image_parts() + current_parts
     contents.append({"role": "user", "parts": current_parts})
 
     payload: dict = {
@@ -227,36 +280,31 @@ def build_anthropic_payload(
     mime: str,
     history: list[dict],
     web_search: bool = False,
+    extra_images: list[tuple[str, str]] | None = None,
 ) -> dict:
+    images = _collect_images(image_b64, mime, extra_images)
+
+    def _image_blocks() -> list[dict]:
+        blocks: list[dict] = []
+        for idx, (b64, m) in enumerate(images):
+            if len(images) > 1:
+                blocks.append({"type": "text", "text": f"[Region #{idx + 1}]"})
+            blocks.append({"type": "image", "source": {"type": "base64", "media_type": m, "data": b64}})
+        return blocks
+
     messages = []
     for idx, turn in enumerate(history[-MAX_HISTORY_TURNS:]):
         role = "assistant" if turn.get("role") == "assistant" else "user"
         text = str(turn.get("text") or "").strip()
         if not text:
             continue
-        if idx == 0 and role == "user" and image_b64:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "source": {"type": "base64", "media_type": mime, "data": image_b64}},
-                        {"type": "text", "text": text},
-                    ],
-                }
-            )
+        if idx == 0 and role == "user" and images:
+            messages.append({"role": "user", "content": _image_blocks() + [{"type": "text", "text": text}]})
         else:
             messages.append({"role": role, "content": text})
 
-    if not messages and image_b64:
-        messages.append(
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": mime, "data": image_b64}},
-                    {"type": "text", "text": user_text},
-                ],
-            }
-        )
+    if not messages and images:
+        messages.append({"role": "user", "content": _image_blocks() + [{"type": "text", "text": user_text}]})
     else:
         messages.append({"role": "user", "content": user_text})
 
@@ -286,7 +334,24 @@ def parse_anthropic_sse_line(line: str) -> str:
     return ""
 
 
-def build_openai_payload(model: str, user_text: str, image_b64: str, mime: str, history: list[dict]) -> dict:
+def build_openai_payload(
+    model: str,
+    user_text: str,
+    image_b64: str,
+    mime: str,
+    history: list[dict],
+    extra_images: list[tuple[str, str]] | None = None,
+) -> dict:
+    images = _collect_images(image_b64, mime, extra_images)
+
+    def _image_items(text: str) -> list[dict]:
+        items: list[dict] = [{"type": "text", "text": text}]
+        for idx, (b64, m) in enumerate(images):
+            if len(images) > 1:
+                items.append({"type": "text", "text": f"[Region #{idx + 1}]"})
+            items.append({"type": "image_url", "image_url": {"url": f"data:{m};base64,{b64}"}})
+        return items
+
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
     user_seen = False
     for turn in history[-MAX_HISTORY_TURNS:]:
@@ -294,30 +359,14 @@ def build_openai_payload(model: str, user_text: str, image_b64: str, mime: str, 
         text = str(turn.get("text") or "").strip()
         if not text:
             continue
-        if not user_seen and role == "user" and image_b64:
+        if not user_seen and role == "user" and images:
             user_seen = True
-            messages.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": text},
-                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}},
-                    ],
-                }
-            )
+            messages.append({"role": "user", "content": _image_items(text)})
         else:
             messages.append({"role": role, "content": text})
 
-    if not user_seen and image_b64:
-        messages.append(
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": user_text},
-                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_b64}"}},
-                ],
-            }
-        )
+    if not user_seen and images:
+        messages.append({"role": "user", "content": _image_items(user_text)})
     else:
         messages.append({"role": "user", "content": user_text})
 
@@ -347,7 +396,18 @@ def build_openai_responses_payload(
     mime: str,
     history: list[dict],
     web_search: bool = True,
+    extra_images: list[tuple[str, str]] | None = None,
 ) -> dict:
+    images = _collect_images(image_b64, mime, extra_images)
+
+    def _resp_items(text: str) -> list[dict]:
+        parts: list[dict] = [{"type": "input_text", "text": text}]
+        for idx, (b64, m) in enumerate(images):
+            if len(images) > 1:
+                parts.append({"type": "input_text", "text": f"[Region #{idx + 1}]"})
+            parts.append({"type": "input_image", "image_url": f"data:{m};base64,{b64}"})
+        return parts
+
     items: list[dict] = []
     user_seen = False
     for turn in history[-MAX_HISTORY_TURNS:]:
@@ -355,31 +415,15 @@ def build_openai_responses_payload(
         text = str(turn.get("text") or "").strip()
         if not text:
             continue
-        if not user_seen and role == "user" and image_b64:
+        if not user_seen and role == "user" and images:
             user_seen = True
-            items.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": text},
-                        {"type": "input_image", "image_url": f"data:{mime};base64,{image_b64}"},
-                    ],
-                }
-            )
+            items.append({"role": "user", "content": _resp_items(text)})
         else:
             content_type = "output_text" if role == "assistant" else "input_text"
             items.append({"role": role, "content": [{"type": content_type, "text": text}]})
 
-    if not user_seen and image_b64:
-        items.append(
-            {
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": user_text},
-                    {"type": "input_image", "image_url": f"data:{mime};base64,{image_b64}"},
-                ],
-            }
-        )
+    if not user_seen and images:
+        items.append({"role": "user", "content": _resp_items(user_text)})
     else:
         items.append({"role": "user", "content": [{"type": "input_text", "text": user_text}]})
 
@@ -408,7 +452,14 @@ def parse_openai_responses_sse_line(line: str) -> str:
     return ""
 
 
-def build_ollama_payload(model: str, user_text: str, image_b64: str, history: list[dict]) -> dict:
+def build_ollama_payload(
+    model: str,
+    user_text: str,
+    image_b64: str,
+    history: list[dict],
+    extra_images: list[tuple[str, str]] | None = None,
+) -> dict:
+    img_list = [b64 for b64, _ in _collect_images(image_b64, "", extra_images)]
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
     user_seen = False
     for turn in history[-MAX_HISTORY_TURNS:]:
@@ -417,14 +468,14 @@ def build_ollama_payload(model: str, user_text: str, image_b64: str, history: li
         if not text:
             continue
         msg: dict = {"role": role, "content": text}
-        if not user_seen and role == "user" and image_b64:
+        if not user_seen and role == "user" and img_list:
             user_seen = True
-            msg["images"] = [image_b64]
+            msg["images"] = img_list
         messages.append(msg)
 
     cur: dict = {"role": "user", "content": user_text}
-    if not user_seen and image_b64:
-        cur["images"] = [image_b64]
+    if not user_seen and img_list:
+        cur["images"] = img_list
     messages.append(cur)
     return {"model": model, "stream": True, "messages": messages}
 
@@ -474,8 +525,10 @@ def build_agent_cli_command(
     model: str = "",
     image_path: str = "",
     web_search: bool = False,
+    extra_image_paths: list[str] | None = None,
 ) -> list[str] | None:
     clean_model = "" if (not model or model == "default") else model.strip()
+    all_image_paths = ([image_path] if image_path else []) + [p for p in (extra_image_paths or []) if p]
     if agent == "claude":
         tools_spec = "Read,WebSearch,WebFetch" if web_search else "Read"
         return [
@@ -531,16 +584,16 @@ def build_agent_cli_command(
         ]
         if clean_model:
             cmd.extend(["-m", clean_model])
-        if image_path:
-            cmd.extend(["-i", image_path])
+        for img_p in all_image_paths:
+            cmd.extend(["-i", img_p])
         cmd.extend(["--", full_prompt])
         return cmd
     if agent == "opencode":
         cmd = ["opencode", "run", "--archived", "--format", "json"]
         if clean_model:
             cmd.extend(["-m", clean_model])
-        if image_path:
-            cmd.extend(["-f", image_path])
+        for img_p in all_image_paths:
+            cmd.extend(["-f", img_p])
         cmd.append(full_prompt)
         return cmd
     if agent == "gemini":
@@ -697,6 +750,7 @@ def run_agent_fallback(
     model: str = "",
     cli: str = "default",
     web_search: bool = False,
+    extra_image_paths: list[str] | None = None,
 ) -> None:
     agent = cli if (cli and cli != "default") else detect_default_agent()
     if not agent:
@@ -712,8 +766,19 @@ def run_agent_fallback(
         )
         return
 
+    all_paths = ([saved_image_path] if saved_image_path else []) + [p for p in (extra_image_paths or []) if p]
     lines = [SYSTEM_PROMPT]
-    if saved_image_path:
+    if len(all_paths) > 1:
+        if agent in ("codex", "opencode"):
+            lines.append(
+                f"Inspect all {len(all_paths)} attached cropped screenshot regions (#1 through #{len(all_paths)}) to answer the user's question."
+            )
+        else:
+            listing = "\n".join(f"- Region #{idx + 1}: {p}" for idx, p in enumerate(all_paths))
+            lines.append(
+                f"Inspect all {len(all_paths)} cropped screenshot region files using your file-reading tool:\n{listing}"
+            )
+    elif saved_image_path:
         if agent in ("codex", "opencode"):
             lines.append("Inspect the attached screenshot image to answer the user's question.")
         else:
@@ -734,6 +799,7 @@ def run_agent_fallback(
         model=model,
         image_path=saved_image_path,
         web_search=web_search,
+        extra_image_paths=extra_image_paths,
     )
     if not cmd or not shutil.which(cmd[0]):
         emit(
@@ -837,6 +903,8 @@ def main() -> int:
 
     image_path = str(req_data.get("imagePath") or "")
     crop = req_data.get("crop")
+    raw_crops = req_data.get("crops")
+    crops_list = [c for c in raw_crops if isinstance(c, dict)] if isinstance(raw_crops, list) and raw_crops else ([crop] if isinstance(crop, dict) else [])
     selected_text = str(req_data.get("selectedText") or "")
     window_info = req_data.get("windowInfo")
     history = req_data.get("history") or []
@@ -849,9 +917,27 @@ def main() -> int:
 
     try:
         resolved = resolve_provider(config, task=task)
-        img_bytes, mime, saved_path = prepare_image(image_path, crop, max_dim=max_dim)
-        image_b64 = base64.b64encode(img_bytes).decode("ascii") if img_bytes else ""
-        user_text = compose_user_text(prompt, selected_text, window_info, has_crop=bool(crop))
+        prepared = prepare_images(image_path, crops_list, max_dim=max_dim)
+        if prepared:
+            img_bytes, mime, saved_path = prepared[0]
+            image_b64 = base64.b64encode(img_bytes).decode("ascii") if img_bytes else ""
+            extra_images = [
+                (base64.b64encode(b).decode("ascii"), m)
+                for b, m, _ in prepared[1:]
+                if b
+            ]
+            extra_paths = [p for _, _, p in prepared[1:] if p]
+        else:
+            mime, saved_path, image_b64 = "", "", ""
+            extra_images, extra_paths = [], []
+
+        user_text = compose_user_text(
+            prompt,
+            selected_text,
+            window_info,
+            has_crop=bool(crops_list),
+            crop_count=len(crops_list),
+        )
         provider = resolved["provider"]
         model = resolved["model"]
 
@@ -863,6 +949,7 @@ def main() -> int:
                 model=model,
                 cli=str(resolved.get("cli") or "default"),
                 web_search=web_search,
+                extra_image_paths=extra_paths,
             )
             return 0
 
@@ -873,7 +960,9 @@ def main() -> int:
             emit({"type": "meta", "provider": "gemini", "model": model, "croppedPath": saved_path, "webSearch": web_search})
             safe_model = urllib.parse.quote(model, safe=".-_")
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{safe_model}:streamGenerateContent?alt=sse"
-            body = json.dumps(build_gemini_payload(user_text, image_b64, mime, history, web_search=web_search)).encode("utf-8")
+            body = json.dumps(
+                build_gemini_payload(user_text, image_b64, mime, history, web_search=web_search, extra_images=extra_images)
+            ).encode("utf-8")
             req = urllib.request.Request(
                 url,
                 data=body,
@@ -890,7 +979,9 @@ def main() -> int:
                 raise RuntimeError("Missing Anthropic API key (set ANTHROPIC_API_KEY or ~/.config/omarchy/screenlens.json)")
             emit({"type": "meta", "provider": "anthropic", "model": model, "croppedPath": saved_path, "webSearch": web_search})
             body = json.dumps(
-                build_anthropic_payload(model, user_text, image_b64, mime, history, web_search=web_search)
+                build_anthropic_payload(
+                    model, user_text, image_b64, mime, history, web_search=web_search, extra_images=extra_images
+                )
             ).encode("utf-8")
             req = urllib.request.Request(
                 "https://api.anthropic.com/v1/messages",
@@ -913,7 +1004,9 @@ def main() -> int:
             emit({"type": "meta", "provider": "openai", "model": model, "croppedPath": saved_path, "webSearch": web_search})
             if web_search:
                 body = json.dumps(
-                    build_openai_responses_payload(model, user_text, image_b64, mime, history, web_search=True)
+                    build_openai_responses_payload(
+                        model, user_text, image_b64, mime, history, web_search=True, extra_images=extra_images
+                    )
                 ).encode("utf-8")
                 req = urllib.request.Request(
                     "https://api.openai.com/v1/responses",
@@ -926,7 +1019,9 @@ def main() -> int:
                 )
                 stream_http(req, parse_openai_responses_sse_line)
             else:
-                body = json.dumps(build_openai_payload(model, user_text, image_b64, mime, history)).encode("utf-8")
+                body = json.dumps(
+                    build_openai_payload(model, user_text, image_b64, mime, history, extra_images=extra_images)
+                ).encode("utf-8")
                 req = urllib.request.Request(
                     "https://api.openai.com/v1/chat/completions",
                     data=body,
@@ -943,7 +1038,9 @@ def main() -> int:
         if provider == "ollama":
             host = resolved["host"]
             emit({"type": "meta", "provider": "ollama", "model": model, "croppedPath": saved_path, "webSearch": False})
-            body = json.dumps(build_ollama_payload(model, user_text, image_b64, history)).encode("utf-8")
+            body = json.dumps(
+                build_ollama_payload(model, user_text, image_b64, history, extra_images=extra_images)
+            ).encode("utf-8")
             req = urllib.request.Request(
                 f"{host}/api/chat",
                 data=body,

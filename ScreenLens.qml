@@ -33,7 +33,24 @@ Item {
   property var lassoPoints: []
   property var lassoPathPoints: [] // Array of Qt.point() for PathPolyline
   property bool draggingCanvas: false
-  property var selectionRect: null // {x, y, w, h} in logical overlay coordinates
+  readonly property int maxPinnedRegions: 6
+  property var selectionRects: [] // Array of logical {x, y, w, h} rects
+  property int activeRegionIndex: -1
+  readonly property var selectionRect: {
+    if (!Array.isArray(selectionRects) || selectionRects.length === 0) return null
+    var idx = (activeRegionIndex >= 0 && activeRegionIndex < selectionRects.length)
+      ? activeRegionIndex
+      : (selectionRects.length - 1)
+    return selectionRects[idx]
+  }
+  property int hoverRegionIndex: -1
+  property string hoverHandle: ""
+  property int dragRegionIndex: -1
+  property string dragHandle: ""
+  property var dragStartRect: null
+  property real dragStartX: 0
+  property real dragStartY: 0
+  property bool lassoPinMode: false
 
   // OCR state
   property bool ocrLoading: false
@@ -155,7 +172,14 @@ Item {
     root.lassoPoints = []
     root.lassoPathPoints = []
     root.draggingCanvas = false
-    root.selectionRect = null
+    root.selectionRects = []
+    root.activeRegionIndex = -1
+    root.hoverRegionIndex = -1
+    root.hoverHandle = ""
+    root.dragRegionIndex = -1
+    root.dragHandle = ""
+    root.dragStartRect = null
+    root.lassoPinMode = false
     root.ocrLoading = false
     root.rawOcrWords = []
     root.ocrWords = []
@@ -216,8 +240,36 @@ Item {
   function clearSelection() {
     root.lassoPoints = []
     root.lassoPathPoints = []
-    root.selectionRect = null
+    root.selectionRects = []
+    root.activeRegionIndex = -1
+    root.hoverRegionIndex = -1
+    root.hoverHandle = ""
+    root.dragRegionIndex = -1
+    root.dragHandle = ""
+    root.dragStartRect = null
+    root.lassoPinMode = false
     root.setSelectedWords([], "", null)
+  }
+
+  function removeRegion(idx) {
+    if (!Array.isArray(root.selectionRects) || idx < 0 || idx >= root.selectionRects.length) return
+    var next = root.selectionRects.slice()
+    next.splice(idx, 1)
+    root.selectionRects = next
+    root.activeRegionIndex = next.length > 0 ? Math.min(idx, next.length - 1) : -1
+    root.hoverRegionIndex = -1
+    root.hoverHandle = ""
+    root.setSelectedWords([], "", null)
+    promptField.forceActiveFocus()
+  }
+
+  function cursorForHandle(handle) {
+    if (handle === "nw" || handle === "se") return Qt.SizeFDiagCursor
+    if (handle === "ne" || handle === "sw") return Qt.SizeBDiagCursor
+    if (handle === "n" || handle === "s") return Qt.SizeVerCursor
+    if (handle === "e" || handle === "w") return Qt.SizeHorCursor
+    if (handle === "move") return root.draggingCanvas ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+    return Qt.CrossCursor
   }
 
   function remapOcrWords() {
@@ -239,6 +291,22 @@ Item {
       root.imageWidth,
       root.imageHeight
     )
+  }
+
+  function currentImageCrops() {
+    if (!Array.isArray(root.selectionRects) || root.selectionRects.length === 0) return []
+    var out = []
+    for (var i = 0; i < root.selectionRects.length; i++) {
+      var mapped = Logic.logicalToImageRect(
+        root.selectionRects[i],
+        panel.width,
+        panel.height,
+        root.imageWidth,
+        root.imageHeight
+      )
+      if (mapped) out.push(mapped)
+    }
+    return out
   }
 
   // ---------------------------------------------------------------- actions
@@ -270,11 +338,13 @@ Item {
     root.loadingElapsedSec = 0
     root.streaming = true
 
+    var crops = root.currentImageCrops()
     var payload = {
       prompt: text,
       task: root.inferTask(explicitTask),
       imagePath: root.screenshotPath,
-      crop: root.currentImageCrop(),
+      crop: crops.length === 1 ? crops[0] : (crops.length > 1 ? crops[0] : null),
+      crops: crops,
       selectedText: root.selectedText,
       windowInfo: { class: root.windowClass, title: root.windowTitle },
       history: history,
@@ -354,11 +424,23 @@ Item {
     }
     // Instant 0 ms path: reuse words already scanned by background OCR.
     if (!root.ocrLoading && root.ocrWords.length > 0) {
-      var instant = root.selectionRect
-        ? Logic.extractWordsInRect(root.ocrWords, root.selectionRect)
-        : Logic.selectWordsBetween(root.ocrWords, 0, root.ocrWords.length - 1, null)
-      if (instant && instant.text && instant.text.trim().length > 0) {
-        var cleanInstant = instant.text.trim()
+      var cleanInstant = ""
+      if (root.selectionRects.length > 1) {
+        var chunks = []
+        for (var r = 0; r < root.selectionRects.length; r++) {
+          var part = Logic.extractWordsInRect(root.ocrWords, root.selectionRects[r])
+          if (part && part.text && part.text.trim().length > 0) {
+            chunks.push("#" + (r + 1) + "\n" + part.text.trim())
+          }
+        }
+        cleanInstant = chunks.join("\n\n")
+      } else {
+        var instant = root.selectionRect
+          ? Logic.extractWordsInRect(root.ocrWords, root.selectionRect)
+          : Logic.selectWordsBetween(root.ocrWords, 0, root.ocrWords.length - 1, null)
+        if (instant && instant.text) cleanInstant = instant.text.trim()
+      }
+      if (cleanInstant.length > 0) {
         root.selectedText = cleanInstant
         root.copyText(cleanInstant)
         return
@@ -513,6 +595,12 @@ Item {
       return selTpl.indexOf("%1") !== -1
         ? selTpl.arg(Commons.I18n.formatNumber(root.selectedText.length))
         : ("Selected text (" + root.selectedText.length + ")")
+    }
+    if (root.selectionRects.length > 1) {
+      var multiTpl = strings.tn("context.multiRegions", root.selectionRects.length)
+      return multiTpl.indexOf("%1") !== -1
+        ? multiTpl.arg(Commons.I18n.formatNumber(root.selectionRects.length))
+        : (root.selectionRects.length + " regions pinned")
     }
     if (root.selectionRect) {
       var crop = root.currentImageCrop()
@@ -759,16 +847,194 @@ Item {
     onWidthChanged: if (root.rawOcrWords.length > 0) root.remapOcrWords()
     onHeightChanged: if (root.rawOcrWords.length > 0) root.remapOcrWords()
 
+    // Canvas gesture MouseArea (handles lasso drawing, OCR text drag, and
+    // interactive crop move/resize handles cleanly without MouseArea conflicts).
+    MouseArea {
+      id: canvasMouse
+      anchors.fill: parent
+      hoverEnabled: true
+      cursorShape: root.mode === "text"
+        ? Qt.IBeamCursor
+        : root.cursorForHandle(root.dragHandle || root.hoverHandle)
+
+      onPressed: function(mouse) {
+        if (mouse.button !== Qt.LeftButton) return
+
+        if (root.mode === "text") {
+          root.draggingCanvas = true
+          root.selectionRects = []
+          root.activeRegionIndex = -1
+          root.hoverRegionIndex = -1
+          root.hoverHandle = ""
+          root.textDragStartPoint = { x: mouse.x, y: mouse.y }
+          root.textDragStartIdx = Logic.hitTestWord(root.ocrWords, mouse.x, mouse.y, 28)
+          if (root.textDragStartIdx >= 0) {
+            var single = Logic.selectWordsBetween(root.ocrWords, root.textDragStartIdx, root.textDragStartIdx, null)
+            root.setSelectedWords(single.indices, single.text, single.bounds)
+          } else {
+            root.setSelectedWords([], "", null)
+          }
+          return
+        }
+
+        // In lasso mode: check if grabbing a corner/edge/interior handle on a locked region.
+        var shiftHeld = !!(mouse.modifiers & Qt.ShiftModifier)
+        if (!shiftHeld && root.selectionRects.length > 0) {
+          var hit = Logic.hitTestRegions(root.selectionRects, mouse.x, mouse.y, 12)
+          if (hit.index >= 0 && hit.handle) {
+            root.draggingCanvas = true
+            root.activeRegionIndex = hit.index
+            root.hoverRegionIndex = hit.index
+            root.hoverHandle = hit.handle
+            root.dragRegionIndex = hit.index
+            root.dragHandle = hit.handle
+            root.dragStartRect = root.selectionRects[hit.index]
+            root.dragStartX = mouse.x
+            root.dragStartY = mouse.y
+            root.setSelectedWords([], "", null)
+            return
+          }
+        }
+
+        // Start a new lasso drag (Shift+drag pins an additional region).
+        root.draggingCanvas = true
+        root.dragRegionIndex = -1
+        root.dragHandle = ""
+        root.dragStartRect = null
+        root.hoverRegionIndex = -1
+        root.hoverHandle = ""
+        root.setSelectedWords([], "", null)
+        root.lassoPinMode = shiftHeld && root.selectionRects.length > 0
+        if (!root.lassoPinMode) {
+          root.selectionRects = []
+          root.activeRegionIndex = -1
+        }
+        root.lassoPoints = [{ x: mouse.x, y: mouse.y }]
+        root.lassoPathPoints = [Qt.point(mouse.x, mouse.y)]
+      }
+
+      onPositionChanged: function(mouse) {
+        if (!root.draggingCanvas) {
+          if (root.mode === "lasso" && root.selectionRects.length > 0) {
+            var hHit = Logic.hitTestRegions(root.selectionRects, mouse.x, mouse.y, 12)
+            root.hoverRegionIndex = hHit.index
+            root.hoverHandle = hHit.handle
+          } else if (root.hoverRegionIndex !== -1 || root.hoverHandle !== "") {
+            root.hoverRegionIndex = -1
+            root.hoverHandle = ""
+          }
+          return
+        }
+
+        if (root.mode === "text") {
+          var endIdx = Logic.hitTestWord(root.ocrWords, mouse.x, mouse.y, 32)
+          var dragRect = null
+          if (root.textDragStartPoint) {
+            dragRect = {
+              x: Math.min(root.textDragStartPoint.x, mouse.x),
+              y: Math.min(root.textDragStartPoint.y, mouse.y),
+              w: Math.abs(mouse.x - root.textDragStartPoint.x),
+              h: Math.abs(mouse.y - root.textDragStartPoint.y)
+            }
+          }
+          var sel = Logic.selectWordsBetween(root.ocrWords, root.textDragStartIdx, endIdx, dragRect)
+          root.setSelectedWords(sel.indices, sel.text, sel.bounds)
+          return
+        }
+
+        // Live move or resize of an existing locked crop region.
+        if (root.dragRegionIndex >= 0 && root.dragHandle && root.dragStartRect) {
+          var updated = Logic.applyCropDrag(
+            root.dragStartRect,
+            root.dragHandle,
+            mouse.x - root.dragStartX,
+            mouse.y - root.dragStartY,
+            panel.width,
+            panel.height,
+            16
+          )
+          var nextRects = root.selectionRects.slice()
+          nextRects[root.dragRegionIndex] = updated
+          root.selectionRects = nextRects
+          return
+        }
+
+        var pts = root.lassoPoints
+        var last = pts.length > 0 ? pts[pts.length - 1] : null
+        if (!last || Math.hypot(mouse.x - last.x, mouse.y - last.y) >= 4) {
+          pts.push({ x: mouse.x, y: mouse.y })
+          root.lassoPoints = pts
+          var pathPts = root.lassoPathPoints.slice()
+          pathPts.push(Qt.point(mouse.x, mouse.y))
+          root.lassoPathPoints = pathPts
+        }
+      }
+
+      onReleased: function(mouse) {
+        if (!root.draggingCanvas) return
+        root.draggingCanvas = false
+
+        if (root.dragRegionIndex >= 0) {
+          root.dragRegionIndex = -1
+          root.dragHandle = ""
+          root.dragStartRect = null
+          var postHit = Logic.hitTestRegions(root.selectionRects, mouse.x, mouse.y, 12)
+          root.hoverRegionIndex = postHit.index
+          root.hoverHandle = postHit.handle
+          promptField.forceActiveFocus()
+          return
+        }
+
+        if (root.mode === "lasso") {
+          var pts = root.lassoPoints.slice()
+          pts.push({ x: mouse.x, y: mouse.y })
+          var rect = Logic.computeSelectionRect(pts, panel.width, panel.height, 8)
+          var pin = root.lassoPinMode || (!!(mouse.modifiers & Qt.ShiftModifier) && root.selectionRects.length > 0)
+          if (rect) {
+            if (pin) {
+              if (root.selectionRects.length >= root.maxPinnedRegions) {
+                root.showToast(strings.t("status.maxRegions").arg(Commons.I18n.formatNumber(root.maxPinnedRegions)))
+              } else {
+                var pinned = root.selectionRects.slice()
+                pinned.push(rect)
+                root.selectionRects = pinned
+                root.activeRegionIndex = pinned.length - 1
+              }
+            } else {
+              root.selectionRects = [rect]
+              root.activeRegionIndex = 0
+            }
+          }
+          root.lassoPoints = []
+          root.lassoPathPoints = []
+          root.lassoPinMode = false
+        }
+        promptField.forceActiveFocus()
+      }
+
+      onExited: {
+        if (!root.draggingCanvas) {
+          root.hoverRegionIndex = -1
+          root.hoverHandle = ""
+        }
+      }
+    }
+
     SLUi.CropOverlay {
       id: cropOverlay
       anchors.fill: parent
-      selectionRect: root.selectionRect
-      imgCrop: root.currentImageCrop()
+      regions: root.selectionRects
+      imgCrops: root.currentImageCrops()
+      activeIndex: root.activeRegionIndex
+      hoverIndex: root.dragRegionIndex >= 0 ? root.dragRegionIndex : root.hoverRegionIndex
+      activeHandle: root.dragHandle || root.hoverHandle
       scrimColor: root.scrimColor
       accentColor: root.accentColor
       bgColor: root.bgColor
+      fgColor: root.fgColor
       cornerRadius: root.cornerRadius
       uiFont: root.uiFont
+      onRemoveRequested: function(idx) { root.removeRegion(idx) }
     }
 
     SLUi.EdgeGlow {
@@ -805,7 +1071,7 @@ Item {
     // Native GPU-rendered luminous 3-layer freehand lasso stroke while dragging.
     Shape {
       anchors.fill: parent
-      visible: root.draggingCanvas && root.mode === "lasso" && root.lassoPathPoints.length > 1
+      visible: root.draggingCanvas && root.dragRegionIndex < 0 && root.mode === "lasso" && root.lassoPathPoints.length > 1
       preferredRendererType: Shape.CurveRenderer
       antialiasing: true
 
@@ -847,77 +1113,6 @@ Item {
         capStyle: ShapePath.RoundCap
         joinStyle: ShapePath.RoundJoin
         PathPolyline { path: root.lassoPathPoints }
-      }
-    }
-
-    // Canvas gesture MouseArea (sits behind the floating UI controls).
-    MouseArea {
-      id: canvasMouse
-      anchors.fill: parent
-      hoverEnabled: true
-      cursorShape: root.mode === "text" ? Qt.IBeamCursor : Qt.CrossCursor
-
-      onPressed: function(mouse) {
-        if (mouse.button !== Qt.LeftButton) return
-        root.draggingCanvas = true
-
-        if (root.mode === "text") {
-          root.selectionRect = null
-          root.textDragStartPoint = { x: mouse.x, y: mouse.y }
-          root.textDragStartIdx = Logic.hitTestWord(root.ocrWords, mouse.x, mouse.y, 28)
-          if (root.textDragStartIdx >= 0) {
-            var single = Logic.selectWordsBetween(root.ocrWords, root.textDragStartIdx, root.textDragStartIdx, null)
-            root.setSelectedWords(single.indices, single.text, single.bounds)
-          } else {
-            root.setSelectedWords([], "", null)
-          }
-        } else {
-          root.setSelectedWords([], "", null)
-          root.selectionRect = null
-          root.lassoPoints = [{ x: mouse.x, y: mouse.y }]
-          root.lassoPathPoints = [Qt.point(mouse.x, mouse.y)]
-        }
-      }
-
-      onPositionChanged: function(mouse) {
-        if (!root.draggingCanvas) return
-        if (root.mode === "text") {
-          var endIdx = Logic.hitTestWord(root.ocrWords, mouse.x, mouse.y, 32)
-          var dragRect = null
-          if (root.textDragStartPoint) {
-            dragRect = {
-              x: Math.min(root.textDragStartPoint.x, mouse.x),
-              y: Math.min(root.textDragStartPoint.y, mouse.y),
-              w: Math.abs(mouse.x - root.textDragStartPoint.x),
-              h: Math.abs(mouse.y - root.textDragStartPoint.y)
-            }
-          }
-          var sel = Logic.selectWordsBetween(root.ocrWords, root.textDragStartIdx, endIdx, dragRect)
-          root.setSelectedWords(sel.indices, sel.text, sel.bounds)
-        } else {
-          var pts = root.lassoPoints
-          var last = pts.length > 0 ? pts[pts.length - 1] : null
-          if (!last || Math.hypot(mouse.x - last.x, mouse.y - last.y) >= 4) {
-            pts.push({ x: mouse.x, y: mouse.y })
-            root.lassoPoints = pts
-            var pathPts = root.lassoPathPoints.slice()
-            pathPts.push(Qt.point(mouse.x, mouse.y))
-            root.lassoPathPoints = pathPts
-          }
-        }
-      }
-
-      onReleased: function(mouse) {
-        if (!root.draggingCanvas) return
-        root.draggingCanvas = false
-        if (root.mode === "lasso") {
-          var pts = root.lassoPoints.slice()
-          pts.push({ x: mouse.x, y: mouse.y })
-          root.selectionRect = Logic.computeSelectionRect(pts, panel.width, panel.height, 8)
-          root.lassoPoints = []
-          root.lassoPathPoints = []
-        }
-        promptField.forceActiveFocus()
       }
     }
 
@@ -1166,7 +1361,7 @@ Item {
                   ? (root.ocrWords.length > 0
                       ? strings.tn("hint.ocrReady", root.ocrWords.length).arg(Commons.I18n.formatNumber(root.ocrWords.length))
                       : strings.t("hint.ocrEmpty"))
-                  : strings.t("hint.lasso"))
+                  : (root.selectionRects.length > 0 ? strings.t("hint.lassoLocked") : strings.t("hint.lasso")))
             color: Util.alpha(root.fgColor, 0.68)
             font.family: root.uiFont
             font.pixelSize: Style.font.caption

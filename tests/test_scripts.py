@@ -240,6 +240,47 @@ class ScreenLensTests(unittest.TestCase):
         self.assertNotIn("--disable-web-search", grok_on)
         self.assertIn("Read,WebSearch,WebFetch", grok_on)
 
+    def test_multi_region_image_payloads_and_cli_attachments(self):
+        extras = [("IMG2_B64", "image/png"), ("IMG3_B64", "image/png")]
+        txt = ask_mod.compose_user_text("Compare these regions", "", {}, has_crop=True, crop_count=3)
+        self.assertIn("3 pinned screen regions", txt)
+
+        gem = ask_mod.build_gemini_payload(txt, "IMG1_B64", "image/png", [], extra_images=extras)
+        gem_inlines = [p["inline_data"]["data"] for p in gem["contents"][0]["parts"] if "inline_data" in p]
+        self.assertEqual(gem_inlines, ["IMG1_B64", "IMG2_B64", "IMG3_B64"])
+
+        ant = ask_mod.build_anthropic_payload("claude-haiku-4-5-20251001", txt, "IMG1_B64", "image/png", [], extra_images=extras)
+        ant_imgs = [b["source"]["data"] for b in ant["messages"][0]["content"] if b.get("type") == "image"]
+        self.assertEqual(ant_imgs, ["IMG1_B64", "IMG2_B64", "IMG3_B64"])
+
+        oai = ask_mod.build_openai_payload("gpt-4.1-mini", txt, "IMG1_B64", "image/png", [], extra_images=extras)
+        oai_imgs = [b["image_url"]["url"] for b in oai["messages"][1]["content"] if b.get("type") == "image_url"]
+        self.assertEqual(len(oai_imgs), 3)
+        self.assertIn("IMG3_B64", oai_imgs[2])
+
+        oai_resp = ask_mod.build_openai_responses_payload(
+            "gpt-4.1-mini", txt, "IMG1_B64", "image/png", [], web_search=True, extra_images=extras
+        )
+        resp_imgs = [b["image_url"] for b in oai_resp["input"][0]["content"] if b.get("type") == "input_image"]
+        self.assertEqual(len(resp_imgs), 3)
+        self.assertIn("IMG2_B64", resp_imgs[1])
+
+        oll = ask_mod.build_ollama_payload("llama3.2-vision", txt, "IMG1_B64", [], extra_images=extras)
+        self.assertEqual(oll["messages"][1]["images"], ["IMG1_B64", "IMG2_B64", "IMG3_B64"])
+
+        codex_cmd = ask_mod.build_agent_cli_command(
+            "codex", "compare", image_path="/tmp/r1.png", extra_image_paths=["/tmp/r2.png", "/tmp/r3.png"]
+        )
+        self.assertEqual(codex_cmd.count("-i"), 3)
+        self.assertIn("/tmp/r2.png", codex_cmd)
+        self.assertIn("/tmp/r3.png", codex_cmd)
+
+        oc_cmd = ask_mod.build_agent_cli_command(
+            "opencode", "compare", image_path="/tmp/r1.png", extra_image_paths=["/tmp/r2.png"]
+        )
+        self.assertEqual(oc_cmd.count("-f"), 2)
+        self.assertIn("/tmp/r2.png", oc_cmd)
+
     def test_voice_payload_extraction(self):
         sample = {"lastDictation": {"timestamp": "2026-11-25T20:00:00Z", "text": "Explain this chart"}}
         self.assertEqual(voice_mod.extract_text(sample), "Explain this chart")

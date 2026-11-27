@@ -35,6 +35,37 @@ const lassoRect = sandbox.computeSelectionRect(
 )
 assert.deepEqual(plain(lassoRect), { x: 0, y: 2, w: 208, h: 126 })
 
+// 2b. Crop handle hit-testing, move/resize clamping, and multi-region stacking
+const box = { x: 100, y: 100, w: 200, h: 150 }
+assert.equal(sandbox.hitTestCropHandle(box, 100, 100, 12), "nw")
+assert.equal(sandbox.hitTestCropHandle(box, 300, 100, 12), "ne")
+assert.equal(sandbox.hitTestCropHandle(box, 100, 250, 12), "sw")
+assert.equal(sandbox.hitTestCropHandle(box, 300, 250, 12), "se")
+assert.equal(sandbox.hitTestCropHandle(box, 200, 100, 12), "n")
+assert.equal(sandbox.hitTestCropHandle(box, 200, 250, 12), "s")
+assert.equal(sandbox.hitTestCropHandle(box, 100, 175, 12), "w")
+assert.equal(sandbox.hitTestCropHandle(box, 300, 175, 12), "e")
+assert.equal(sandbox.hitTestCropHandle(box, 200, 175, 12), "move")
+assert.equal(sandbox.hitTestCropHandle(box, 40, 40, 12), "")
+
+// Move clamped inside overlay bounds (never shrinks box)
+assert.deepEqual(plain(sandbox.applyCropDrag(box, "move", 50, -40, 1920, 1080, 16)), { x: 150, y: 60, w: 200, h: 150 })
+assert.deepEqual(plain(sandbox.applyCropDrag(box, "move", -500, 2000, 1920, 1080, 16)), { x: 0, y: 930, w: 200, h: 150 })
+
+// Resize from nw/se clamped to minSize=16 and overlay edges
+assert.deepEqual(plain(sandbox.applyCropDrag(box, "se", 40, -30, 1920, 1080, 16)), { x: 100, y: 100, w: 240, h: 120 })
+assert.deepEqual(plain(sandbox.applyCropDrag(box, "nw", 500, 500, 1920, 1080, 16)), { x: 284, y: 234, w: 16, h: 16 })
+assert.deepEqual(plain(sandbox.applyCropDrag(box, "e", 5000, 0, 1920, 1080, 16)), { x: 100, y: 100, w: 1820, h: 150 })
+
+// Multi-region hit-testing prioritizes topmost (latest) region on overlap
+const stacked = [
+  { x: 100, y: 100, w: 200, h: 200 },
+  { x: 150, y: 150, w: 200, h: 200 }
+]
+assert.deepEqual(plain(sandbox.hitTestRegions(stacked, 200, 200, 12)), { index: 1, handle: "move" })
+assert.deepEqual(plain(sandbox.hitTestRegions(stacked, 110, 110, 12)), { index: 0, handle: "nw" })
+assert.deepEqual(plain(sandbox.hitTestRegions(stacked, 10, 10, 12)), { index: -1, handle: "" })
+
 // 3. Logical-to-image HiDPI scaling (e.g. 1.5x monitor)
 const imgCrop = sandbox.logicalToImageRect({ x: 100, y: 200, w: 400, h: 300 }, 1920, 1080, 2880, 1620)
 assert.deepEqual(plain(imgCrop), { x: 150, y: 300, w: 600, h: 450 })
