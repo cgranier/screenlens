@@ -75,6 +75,25 @@ class ConfigBackendTests(unittest.TestCase):
         self.assertEqual(updated2.count(config_mod.PLUGIN_ID), 1)
         self.assertIn('o.bind("SUPER + ALT + A"', updated2)
 
+        # Secondary Voice-to-ScreenLens binding lives cleanly inside the same fenced block.
+        updated_voice = config_mod.apply_bindings_text(
+            updated2,
+            "SUPER + ALT + A",
+            rebind=False,
+            voice_chord="SUPER + ALT + V",
+            voice_rebind=True,
+        )
+        self.assertEqual(updated_voice.count(config_mod.BLOCK_BEGIN), 1)
+        self.assertIn('o.rebind("SUPER + ALT + V"', updated_voice)
+        self.assertIn("omarchy-shell shell summon", updated_voice)
+        self.assertIn('{\\"voice\\":true}', updated_voice)
+        with tempfile.TemporaryDirectory() as tmp:
+            bpath = os.path.join(tmp, "bindings.lua")
+            with open(bpath, "w", encoding="utf-8") as f:
+                f.write(updated_voice)
+            self.assertEqual(config_mod.read_keybind_from_bindings(bpath), "SUPER + ALT + A")
+            self.assertEqual(config_mod.read_voice_keybind_from_bindings(bpath), "SUPER + ALT + V")
+
     def test_layer_rule_block_migration_and_idempotence(self):
         legacy = (
             'require("default.hypr.omarchy")\n\n'

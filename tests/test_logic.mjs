@@ -165,6 +165,16 @@ assert.equal(
   "What is this error? please",
   "normal user typing after dictation must not be stripped"
 )
+assert.equal(
+  sandbox.dedupeLateVoicePaste("What is this error?", "", "What is this error?"),
+  "",
+  "late auto-paste after voice auto-submit clears input must be stripped"
+)
+assert.deepEqual(plain(sandbox.parseLaunchPayload("")), { voice: false, autoSubmit: null })
+assert.deepEqual(plain(sandbox.parseLaunchPayload('{"voice":true}')), { voice: true, autoSubmit: null })
+assert.deepEqual(plain(sandbox.parseLaunchPayload('{"voiceAutoSubmit":true}')), { voice: true, autoSubmit: true })
+assert.deepEqual(plain(sandbox.parseLaunchPayload('{"voice":true,"autoSubmit":false}')), { voice: true, autoSubmit: false })
+assert.deepEqual(plain(sandbox.parseLaunchPayload("not-json")), { voice: false, autoSubmit: null })
 
 // 8. Contrast ink helper and PlainText-safe answer block parser
 assert.equal(sandbox.inkOn("#f5f6fa"), "#101315")

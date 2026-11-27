@@ -71,6 +71,91 @@ Column {
 
       Item {
         width: parent.width
+        implicitHeight: voiceKbCol.implicitHeight + Style.space(14)
+
+        Column {
+          id: voiceKbCol
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          anchors.leftMargin: Style.space(10)
+          anchors.rightMargin: Style.space(10)
+          spacing: Style.space(6)
+
+          SLRoot.PlainText {
+            width: parent.width
+            text: tab.strings.t("settings.voiceKeybindLabel")
+            color: tab.panel.secondaryInk
+            font.family: tab.panel.uiFont
+            font.pixelSize: Style.font.caption
+          }
+
+          Row {
+            id: voiceKeybindRow
+            width: parent.width
+            spacing: Style.space(6)
+
+            Ui.TextField {
+              id: voiceKeybindInput
+              width: voiceKeybindRow.width - applyVoiceKbBtn.implicitWidth - voiceKeybindRow.spacing
+              text: tab.panel.voiceKeybindDraft
+              placeholderText: "SUPER + ALT + V"
+              foreground: tab.panel.fgColor
+              accent: tab.panel.accentColor
+              onTextEdited: tab.panel.voiceKeybindDraft = text
+              onAccepted: tab.panel.applyVoiceKeybind()
+              Keys.onEscapePressed: tab.panel.close()
+            }
+
+            Ui.Button {
+              id: applyVoiceKbBtn
+              foreground: tab.panel.fgColor
+              anchors.verticalCenter: parent.verticalCenter
+              text: tab.strings.t("settings.apply")
+              fontSize: Style.font.bodySmall
+              bordered: true
+              onClicked: tab.panel.applyVoiceKeybind()
+            }
+          }
+        }
+      }
+
+      SLUi.CardDivider { width: parent.width; dividerColor: tab.panel.rowDivider }
+
+      Item {
+        width: parent.width
+        implicitHeight: Math.max(Style.space(38), voiceAutoLabel.implicitHeight + Style.space(14))
+
+        SLRoot.PlainText {
+          id: voiceAutoLabel
+          anchors.left: parent.left
+          anchors.right: voiceAutoSwitch.left
+          anchors.leftMargin: Style.space(10)
+          anchors.rightMargin: Style.space(10)
+          anchors.verticalCenter: parent.verticalCenter
+          text: tab.strings.t("settings.voiceAutoSubmit")
+          color: tab.panel.secondaryInk
+          font.family: tab.panel.uiFont
+          font.pixelSize: Style.font.caption
+          wrapMode: Text.Wrap
+        }
+
+        Ui.ToggleSwitch {
+          id: voiceAutoSwitch
+          anchors.right: parent.right
+          anchors.rightMargin: Style.space(10)
+          anchors.verticalCenter: parent.verticalCenter
+          checked: tab.panel.cfgVal("voiceAutoSubmit", true) !== false
+          foreground: tab.panel.fgColor
+          accent: tab.panel.accentColor
+          onToggled: tab.panel.patchConfig({ voiceAutoSubmit: !(tab.panel.cfgVal("voiceAutoSubmit", true) !== false) })
+        }
+      }
+
+      SLUi.CardDivider { width: parent.width; dividerColor: tab.panel.rowDivider }
+
+      Item {
+        width: parent.width
         implicitHeight: Math.max(Style.space(38), rebindLabel.implicitHeight + Style.space(14))
 
         SLRoot.PlainText {
