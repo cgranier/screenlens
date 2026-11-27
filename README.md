@@ -6,7 +6,7 @@ Summon ScreenLens over any window or workspace, circle or box one or more region
 
 > **Public Beta (`v0.9.2`):** ScreenLens is in active beta for early Omarchy testers. Bug reports and ideas are very welcome in [Issues](https://github.com/cgranier/screenlens/issues).
 
-![ScreenLens overlay chatting live over a browser window](docs/overlay-demo.png)
+![ScreenLens overlay comparing two pinned regions with live web grounding](docs/overlay-demo.png)
 
 ## Features
 
@@ -39,6 +39,10 @@ Summon ScreenLens over any window or workspace, circle or box one or more region
   - **History:** Search recent conversations, inspect thumbnails & full threads, copy answers, resume visual context, hand off to your coding agent, or delete/clear history.
 
 ## Screenshots
+
+### Context-Aware Table Extraction (Markdown + CSV)
+
+![ScreenLens auto-detecting a table and extracting Markdown + CSV](docs/table-extract-demo.png)
 
 ### Settings Panel
 
