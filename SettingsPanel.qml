@@ -77,6 +77,15 @@ Ui.Panel {
   property string selectedOcrInstallCode: ""
   property bool installingOcrPack: false
 
+  // Update check state (cached hourly via scripts/updater.py)
+  property bool updateChecking: false
+  property bool updateAvailable: false
+  property int updateBehind: 0
+  property bool updateManaged: true
+  property string updateError: ""
+  property int updateSweepTick: 0
+  property bool updateCheckedThisOpen: false
+
   implicitWidth: barButton.implicitWidth
   implicitHeight: barButton.implicitHeight
 
@@ -102,6 +111,7 @@ Ui.Panel {
     if (opened) {
       root.statusText = ""
       root.statusError = false
+      root.updateCheckedThisOpen = false
       root.loadState()
     }
   }
@@ -392,6 +402,64 @@ Ui.Panel {
     root.patchConfig(patch)
   }
 
+  function checkForUpdates(force) {
+    if (root.updateChecking) return
+    root.updateChecking = true
+    root.updateError = ""
+    var cmd = ["/usr/bin/python3", root.pluginDir + "/scripts/updater.py", "check"]
+    if (force) cmd.push("--force")
+    updateCheckProc.command = cmd
+    updateCheckProc.running = false
+    updateCheckProc.running = true
+  }
+
+  function applyUpdate() {
+    if (!root.updateManaged) {
+      root.setStatus(strings.t("settings.updateUnmanaged"), false)
+      return
+    }
+    root.close()
+    Util.execArgv(["/usr/bin/python3", root.pluginDir + "/scripts/updater.py", "apply"])
+  }
+
+  function updateTooltipText() {
+    if (root.updateChecking) return strings.t("settings.updateChecking")
+    if (root.updateError) return strings.t("settings.updateFailed").arg(root.updateError)
+    if (!root.updateManaged) return strings.t("settings.updateUnmanaged")
+    if (root.updateAvailable && root.updateBehind > 0) {
+      return strings.tn("settings.updateAvailable", root.updateBehind).arg(Commons.I18n.formatNumber(root.updateBehind))
+    }
+    return strings.t("settings.updateUpToDate")
+  }
+
+  Timer {
+    id: updateSweepTimer
+    interval: 100
+    repeat: true
+    running: root.updateChecking
+    onTriggered: root.updateSweepTick = (root.updateSweepTick + 1) % 1000
+  }
+
+  Process {
+    id: updateCheckProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.updateChecking = false
+        var res = null
+        try { res = JSON.parse(text) } catch (e) { res = null }
+        if (res && res.ok) {
+          root.updateManaged = res.managed !== false
+          root.updateAvailable = res.available === true
+          root.updateBehind = Number(res.behind || 0)
+          root.updateError = ""
+        } else {
+          root.updateError = (res && res.error) ? String(res.error) : "fetch failed"
+        }
+      }
+    }
+  }
+
   Timer {
     id: statusClearTimer
     interval: 3500
@@ -414,6 +482,10 @@ Ui.Panel {
           root.keybindDraft = String(res.config.keybind || "SUPER + ALT + A")
           var ol = (res.config.providers && res.config.providers.ollama) ? res.config.providers.ollama : ({})
           root.ollamaHostDraft = String(ol.host || "http://127.0.0.1:11434")
+          if (root.opened && !root.updateCheckedThisOpen && res.config.autoCheckUpdates !== false) {
+            root.updateCheckedThisOpen = true
+            root.checkForUpdates(false)
+          }
         }
       }
     }
@@ -816,6 +888,10 @@ Ui.Panel {
           event.accepted = true
         } else if (event.key === Qt.Key_C && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
           root.launchCapture()
+          event.accepted = true
+        } else if (event.key === Qt.Key_U && (event.modifiers & Qt.ShiftModifier) && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
+          if (root.updateAvailable) root.applyUpdate()
+          else root.checkForUpdates(true)
           event.accepted = true
         }
       }
@@ -1253,6 +1329,39 @@ Ui.Panel {
                             onClicked: root.patchConfig({ maxImageDim: modelData })
                           }
                         }
+                      }
+                    }
+
+                    CardDivider { width: parent.width }
+
+                    Item {
+                      width: parent.width
+                      implicitHeight: Style.space(38)
+
+                      PlainText {
+                        anchors.left: parent.left
+                        anchors.right: autoUpdateSwitch.left
+                        anchors.leftMargin: Style.space(10)
+                        anchors.rightMargin: Style.space(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: strings.t("settings.autoCheckUpdates")
+                        color: root.secondaryInk
+                        font.family: root.uiFont
+                        font.pixelSize: Style.font.caption
+                        elide: Text.ElideRight
+                      }
+
+                      Ui.ToggleSwitch {
+                        id: autoUpdateSwitch
+                        anchors.right: parent.right
+                        anchors.rightMargin: Style.space(10)
+                        anchors.verticalCenter: parent.verticalCenter
+                        checked: root.cfgVal("autoCheckUpdates", true) !== false
+                        foreground: root.fgColor
+                        accent: root.accentColor
+                        onToggled: root.patchConfig({
+                          autoCheckUpdates: !(root.cfgVal("autoCheckUpdates", true) !== false)
+                        })
                       }
                     }
                   }
@@ -2159,13 +2268,103 @@ Ui.Panel {
             }
           }
 
-          PlainText {
+          Row {
             anchors.right: parent.right
             anchors.bottom: parent.bottom
-            text: "v" + String((root.manifest && root.manifest.version) || "0.9.1")
-            color: Util.alpha(root.fgColor, 0.38)
-            font.family: root.uiFont
-            font.pixelSize: Style.font.caption
+            spacing: Style.space(6)
+
+            PlainText {
+              anchors.verticalCenter: parent.verticalCenter
+              text: "v" + String((root.manifest && root.manifest.version) || "0.9.2")
+              color: Util.alpha(root.fgColor, 0.38)
+              font.family: root.uiFont
+              font.pixelSize: Style.font.caption
+            }
+
+            // Reel-inspired compact update cue chip (click to check/update, or Shift+U)
+            Rectangle {
+              id: updateChip
+              anchors.verticalCenter: parent.verticalCenter
+              radius: Math.min(3, root.cornerRadius)
+              clip: true
+              color: root.updateAvailable
+                ? (updateHover.hovered ? Util.alpha(root.accentColor, 0.24) : Util.alpha(root.accentColor, 0.14))
+                : (root.updateError
+                    ? Util.alpha(root.urgentColor, 0.16)
+                    : (updateHover.hovered ? root.hoverFill : "transparent"))
+              border.width: 1
+              border.color: root.updateAvailable
+                ? (updateHover.hovered ? root.accentColor : Util.alpha(root.accentColor, 0.48))
+                : (root.updateError
+                    ? Util.alpha(root.urgentColor, 0.48)
+                    : (updateHover.hovered ? Util.alpha(root.fgColor, 0.28) : Util.alpha(root.fgColor, 0.10)))
+              implicitWidth: Math.max(Style.space(22), updateChipRow.implicitWidth + Style.space(10))
+              implicitHeight: Style.space(17)
+
+              Row {
+                id: updateChipRow
+                anchors.centerIn: parent
+                spacing: Style.space(3)
+
+                PlainText {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.updateAvailable ? "↑" : "󰑐"
+                  color: root.updateAvailable
+                    ? root.accentColor
+                    : (root.updateError
+                        ? root.urgentColor
+                        : (root.updateChecking || updateHover.hovered ? root.secondaryInk : Util.alpha(root.fgColor, 0.40)))
+                  font.family: root.uiFont
+                  font.pixelSize: Style.font.caption
+                  font.bold: root.updateAvailable
+                }
+
+                PlainText {
+                  visible: root.updateAvailable && root.updateBehind > 0
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: Commons.I18n.formatNumber(root.updateBehind)
+                  color: root.accentColor
+                  font.family: root.uiFont
+                  font.pixelSize: Math.max(9, Style.font.caption - 1)
+                  font.bold: true
+                }
+              }
+
+              // Sweeping 2 px accent progress bar while checking
+              Rectangle {
+                visible: root.updateChecking
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
+                height: 2
+                color: Util.alpha(root.accentColor, 0.18)
+
+                Rectangle {
+                  readonly property real trackW: parent.width
+                  readonly property real barW: Math.max(8, trackW * 0.45)
+                  readonly property real phase: ((root.updateSweepTick * 0.08) % 1.0)
+                  x: -barW + phase * (trackW + barW)
+                  width: barW
+                  height: parent.height
+                  color: root.accentColor
+                }
+              }
+
+              Ui.PanelToolTip {
+                visible: updateHover.hovered
+                text: root.updateTooltipText()
+              }
+
+              HoverHandler { id: updateHover; cursorShape: Qt.PointingHandCursor }
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  if (root.updateAvailable) root.applyUpdate()
+                  else root.checkForUpdates(true)
+                }
+              }
+            }
           }
         }
       }

@@ -4,7 +4,7 @@ An Android "Circle to Search"-style on-screen AI overlay and Settings panel plug
 
 Summon ScreenLens over any window or workspace, circle/drag a region or select on-screen OCR text, dictate or type a question, and stream fast answers directly from your preferred AI provider—or hand the entire visual context straight off to your Omarchy coding agent.
 
-> **Public Beta (`v0.9.1`):** ScreenLens is in active beta for early Omarchy testers. Bug reports and ideas are very welcome in [Issues](https://github.com/cgranier/screenlens/issues).
+> **Public Beta (`v0.9.2`):** ScreenLens is in active beta for early Omarchy testers. Bug reports and ideas are very welcome in [Issues](https://github.com/cgranier/screenlens/issues).
 
 ![ScreenLens overlay chatting live over a browser window](docs/overlay-demo.png)
 
@@ -51,6 +51,10 @@ omarchy plugin add https://github.com/cgranier/screenlens --enable
 > **Tip:** If you skip `setup.sh`, you can still configure your hotkey anytime from the bar icon → **General → Keybinding** (applying a keybind also ensures the `no_anim` layer rule is set).
 
 ### Updating
+
+ScreenLens checks its git remote automatically (cached for an hour; toggleable under **Settings → General**) and shows an **`↑ N`** badge in the bottom-right footer of the Settings panel whenever new commits are available. Click the badge—or press **`Shift+U`** while Settings is open—to review incoming commits, run `omarchy plugin update`, and restart `omarchy-shell` automatically.
+
+You can also update manually from a terminal:
 
 ```sh
 omarchy plugin update io.github.cgranier.screenlens

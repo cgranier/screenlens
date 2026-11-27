@@ -121,6 +121,7 @@ DEFAULT_CONFIG = {
     "theme": "system",
     "defaultMode": "lasso",
     "maxImageDim": 1920,
+    "autoCheckUpdates": True,
     "translateLanguage": "English",
     "ocrLanguages": ["eng"],
     "defaultProvider": "auto",
@@ -199,6 +200,7 @@ def normalize_config(raw: dict | None) -> dict:
     except (TypeError, ValueError):
         dim = 1920
     cfg["maxImageDim"] = max(512, min(3840, dim))
+    cfg["autoCheckUpdates"] = bool(cfg.get("autoCheckUpdates", True))
 
     langs = cfg.get("ocrLanguages")
     if not isinstance(langs, list) or not langs:

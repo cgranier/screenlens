@@ -105,5 +105,16 @@
   "settings.saveFailed": "Could not save settings",
   "settings.keybindApplied": "Keybind updated to %1",
   "settings.keybindFailed": "Could not update keybind",
+  "settings.section.updates": "Updates",
+  "settings.autoCheckUpdates": "Check for updates automatically (hourly cache)",
+  "settings.updateChecking": "Checking for updates...",
+  "settings.updateUpToDate": "Up to date · Click to check for updates",
+  "settings.updateAvailable": {
+    "one": "%1 new commit available · Click or Shift+U to update",
+    "other": "%1 new commits available · Click or Shift+U to update"
+  },
+  "settings.updateUnmanaged": "Local dev copy (not git-managed)",
+  "settings.updateFailed": "Update check failed: %1",
+  "settings.updateStarted": "Opened updater in terminal",
   "settings.footerHint": "Tab cycles pages · Secrets stay in 0600 ~/.config/omarchy/screenlens.json"
 }
