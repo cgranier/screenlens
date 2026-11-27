@@ -46,8 +46,8 @@ Ui.Panel {
   readonly property int cornerRadius: Style.cornerRadius
   readonly property string uiFont: Style.font.family
 
-  property string activeTab: "general" // "general" | "providers" | "tasks" | "language"
-  readonly property var tabIds: ["general", "providers", "tasks", "language"]
+  property string activeTab: "general" // "general" | "providers" | "tasks" | "language" | "history"
+  readonly property var tabIds: ["general", "providers", "tasks", "language", "history"]
 
   // Live config state loaded from 0600 ~/.config/omarchy/screenlens.json
   property var config: ({})
@@ -78,6 +78,15 @@ Ui.Panel {
   property var ocrAvailable: []
   property string selectedOcrInstallCode: ""
   property bool installingOcrPack: false
+
+  // Session History tab state
+  property var historySessions: []
+  property int historyStorageBytes: 0
+  property bool historyLoading: false
+  property string historyQuery: ""
+  property string selectedHistoryId: ""
+  property string confirmDeleteId: ""
+  property bool confirmClearAll: false
 
   // Update check state (cached hourly via scripts/updater.py)
   property bool updateChecking: false
@@ -114,6 +123,8 @@ Ui.Panel {
       root.statusText = ""
       root.statusError = false
       root.updateCheckedThisOpen = false
+      root.confirmDeleteId = ""
+      root.confirmClearAll = false
       root.loadState()
     }
   }
@@ -139,10 +150,83 @@ Ui.Panel {
     loadConfigProc.running = true
     ocrStatusProc.running = false
     ocrStatusProc.running = true
+    root.loadHistory()
     if (Object.keys(root.catalog).length === 0) {
       loadCatalogProc.running = false
       loadCatalogProc.running = true
     }
+  }
+
+  function loadHistory() {
+    root.historyLoading = true
+    historyListProc.running = false
+    historyListProc.running = true
+  }
+
+  function pruneHistory() {
+    historyPruneProc.running = false
+    historyPruneProc.running = true
+  }
+
+  function copyText(text) {
+    var s = String(text || "")
+    if (!s) return
+    Quickshell.execDetached(["wl-copy", "--", s.slice(0, 65536)])
+    root.setStatus(strings.t("settings.historyCopied"), false)
+  }
+
+  function resumeHistorySession(sess) {
+    if (!sess || !sess.id) return
+    var sid = String(sess.id)
+    root.close()
+    Util.execArgv(["omarchy-shell", "shell", "summon", root.moduleName, JSON.stringify({ resumeId: sid })])
+  }
+
+  function handoffHistorySession(sess) {
+    if (!sess) return
+    var msgs = Array.isArray(sess.messages) ? sess.messages : []
+    var imgPath = String(sess.framePath || sess.thumbPath || "")
+    Util.execArgv([
+      "/usr/bin/python3",
+      root.pluginDir + "/scripts/actions.py",
+      "handoff-direct",
+      "--image", imgPath,
+      "--crop", "",
+      "--window-class", String(sess.windowClass || ""),
+      "--window-title", String(sess.windowTitle || ""),
+      "--selected-text", String(sess.selectedText || ""),
+      "--draft", "",
+      "--messages-json", JSON.stringify(msgs)
+    ])
+    root.close()
+  }
+
+  function requestDeleteHistorySession(sid) {
+    if (!sid) return
+    if (root.confirmDeleteId !== sid) {
+      root.confirmDeleteId = sid
+      root.confirmClearAll = false
+      confirmResetTimer.restart()
+      return
+    }
+    root.confirmDeleteId = ""
+    confirmResetTimer.stop()
+    historyDeleteProc.command = ["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "delete", sid]
+    historyDeleteProc.running = false
+    historyDeleteProc.running = true
+  }
+
+  function requestClearAllHistory() {
+    if (!root.confirmClearAll) {
+      root.confirmClearAll = true
+      root.confirmDeleteId = ""
+      confirmResetTimer.restart()
+      return
+    }
+    root.confirmClearAll = false
+    confirmResetTimer.stop()
+    historyClearProc.running = false
+    historyClearProc.running = true
   }
 
   function isOcrLangActive(code) {
@@ -549,6 +633,11 @@ Ui.Panel {
         if (res && res.ok && res.config) {
           root.config = res.config
           root.setStatus(strings.t("settings.saved"), false)
+          if (root.pendingPatchJson.indexOf("historyMaxSessions") !== -1
+              || root.pendingPatchJson.indexOf("historyRetentionDays") !== -1
+              || root.pendingPatchJson.indexOf("historySaveImages") !== -1) {
+            root.pruneHistory()
+          }
         } else {
           root.setStatus((res && res.error) ? res.error : strings.t("settings.saveFailed"), true)
         }
@@ -683,6 +772,76 @@ Ui.Panel {
           root.setStatus((res && res.error) ? res.error : strings.t("settings.keybindFailed"), true)
         }
       }
+    }
+  }
+
+  Timer {
+    id: confirmResetTimer
+    interval: 4000
+    repeat: false
+    onTriggered: {
+      root.confirmDeleteId = ""
+      root.confirmClearAll = false
+    }
+  }
+
+  Process {
+    id: historyListProc
+    command: ["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "list"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.historyLoading = false
+        var res = null
+        try { res = JSON.parse(text) } catch (e) { res = null }
+        if (res && res.ok && Array.isArray(res.sessions)) {
+          root.historySessions = res.sessions
+          root.historyStorageBytes = Number(res.storageBytes) || 0
+        }
+      }
+    }
+  }
+
+  Process {
+    id: historyDeleteProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var res = null
+        try { res = JSON.parse(text) } catch (e) { res = null }
+        if (res && res.ok) {
+          root.selectedHistoryId = ""
+          root.loadHistory()
+          root.setStatus(strings.t("settings.historyDeleted"), false)
+        }
+      }
+    }
+  }
+
+  Process {
+    id: historyClearProc
+    command: ["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "clear"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var res = null
+        try { res = JSON.parse(text) } catch (e) { res = null }
+        if (res && res.ok) {
+          root.selectedHistoryId = ""
+          root.historySessions = []
+          root.historyStorageBytes = Number(res.storageBytes) || 0
+          root.setStatus(strings.t("settings.historyCleared"), false)
+        }
+      }
+    }
+  }
+
+  Process {
+    id: historyPruneProc
+    command: ["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "prune"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.loadHistory()
     }
   }
 
@@ -956,13 +1115,14 @@ Ui.Panel {
                 { id: "general",   icon: "󰒓", label: strings.t("settings.tab.general") },
                 { id: "providers", icon: "󰚩", label: strings.t("settings.tab.providers") },
                 { id: "tasks",     icon: "󰒋", label: strings.t("settings.tab.tasks") },
-                { id: "language",  icon: "󰗊", label: strings.t("settings.tab.language") }
+                { id: "language",  icon: "󰗊", label: strings.t("settings.tab.language") },
+                { id: "history",   icon: "󰋚", label: strings.t("settings.tab.history") }
               ]
               delegate: Item {
                 id: tabItem
                 required property var modelData
                 readonly property bool isActive: root.activeTab === modelData.id
-                width: tabStripRow.width / 4
+                width: tabStripRow.width / root.tabIds.length
                 height: tabStripRow.height
 
                 Row {
@@ -1062,6 +1222,13 @@ Ui.Panel {
 
               SLTabs.LanguageTab {
                 visible: root.activeTab === "language"
+                width: parent.width
+                panel: root
+                strings: strings
+              }
+
+              SLTabs.HistoryTab {
+                visible: root.activeTab === "history"
                 width: parent.width
                 panel: root
                 strings: strings

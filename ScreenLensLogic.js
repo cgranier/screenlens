@@ -975,7 +975,7 @@ function dedupeLateVoicePaste(currentText, expectedAfterInsert, transcript) {
 
 // Safely parses a JSON summon payload passed to ScreenLens.open(payloadJson).
 function parseLaunchPayload(payloadJson) {
-  var out = { voice: false, autoSubmit: null }
+  var out = { voice: false, autoSubmit: null, resumeId: "", resumeLast: false }
   if (!payloadJson) return out
   var obj = null
   if (typeof payloadJson === "object") {
@@ -992,7 +992,86 @@ function parseLaunchPayload(payloadJson) {
   } else if (typeof obj.autoSubmit === "boolean") {
     out.autoSubmit = obj.autoSubmit
   }
+  if (typeof obj.resumeId === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(obj.resumeId.trim())) {
+    out.resumeId = obj.resumeId.trim()
+  }
+  if (obj.resumeLast === true) {
+    out.resumeLast = true
+  }
   return out
+}
+
+// Extracts concise title, latest answer snippet, and turn count for a saved session.
+function sessionPreview(session) {
+  var s = session || ({})
+  var msgs = Array.isArray(s.messages) ? s.messages : []
+  var firstUser = ""
+  var lastAssistant = ""
+  for (var i = 0; i < msgs.length; i++) {
+    var m = msgs[i]
+    if (!m || !m.text) continue
+    if (!firstUser && m.role === "user") firstUser = String(m.text).replace(/\s+/g, " ").trim()
+    if (m.role === "assistant") lastAssistant = String(m.text).replace(/\s+/g, " ").trim()
+  }
+  var title = firstUser || String(s.windowTitle || s.windowClass || "ScreenLens session")
+  return {
+    title: title.slice(0, 120),
+    snippet: stripInlineMarkdown(lastAssistant).slice(0, 180),
+    latestAnswer: lastAssistant,
+    turns: msgs.length
+  }
+}
+
+// Filters saved sessions client-side (0 ms) by question, answer, app class/title, or provider.
+function filterHistorySessions(sessions, query) {
+  if (!Array.isArray(sessions)) return []
+  var q = String(query || "").trim().toLowerCase()
+  if (!q) return sessions
+  var out = []
+  for (var i = 0; i < sessions.length; i++) {
+    var s = sessions[i]
+    if (!s) continue
+    var hay = [
+      String(s.windowClass || ""),
+      String(s.windowTitle || ""),
+      String(s.providerLabel || ""),
+      String(s.selectedText || "")
+    ]
+    var msgs = Array.isArray(s.messages) ? s.messages : []
+    for (var j = 0; j < msgs.length; j++) {
+      if (msgs[j] && msgs[j].text) hay.push(String(msgs[j].text))
+    }
+    if (hay.join("\n").toLowerCase().indexOf(q) !== -1) {
+      out.push(s)
+    }
+  }
+  return out
+}
+
+// Formats a byte count into a compact human label ("0 B", "142 KB", "1.8 MB").
+function formatBytes(bytes) {
+  var b = Number(bytes || 0)
+  if (!(b > 0)) return "0 B"
+  if (b < 1024) return Math.round(b) + " B"
+  if (b < 1024 * 1024) return Math.round(b / 1024) + " KB"
+  return (b / (1024 * 1024)).toFixed(1) + " MB"
+}
+
+// Formats an epoch-ms timestamp into a compact relative label ("Just now", "5m ago", "2h ago", "3d ago").
+function formatRelativeTime(epochMs, nowMs) {
+  var ts = Number(epochMs || 0)
+  var now = typeof nowMs === "number" ? nowMs : Date.now()
+  if (!(ts > 0)) return ""
+  var diffSec = Math.max(0, Math.floor((now - ts) / 1000))
+  if (diffSec < 45) return "Just now"
+  var diffMin = Math.floor(diffSec / 60)
+  if (diffMin < 60) return diffMin + "m ago"
+  var diffHr = Math.floor(diffMin / 60)
+  if (diffHr < 24) return diffHr + "h ago"
+  var diffDay = Math.floor(diffHr / 24)
+  if (diffDay === 1) return "Yesterday"
+  if (diffDay < 30) return diffDay + "d ago"
+  return Math.floor(diffDay / 30) + "mo ago"
 }
 
 // Picks high-contrast foreground ink for a hex color (e.g. text over accent fills).

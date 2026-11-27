@@ -27,6 +27,13 @@ Item {
   property int imageHeight: 0
   property string windowClass: ""
   property string windowTitle: ""
+  property string liveScreenshotPath: ""
+  property int liveImageWidth: 0
+  property int liveImageHeight: 0
+  property string liveWindowClass: ""
+  property string liveWindowTitle: ""
+  property bool resumedFrameActive: false
+  property bool sessionFrameReplaced: false
 
   // Interaction mode: "lasso" (freehand circle), "box" (rectangle marquee), or "text" (OCR word selection)
   property string mode: "lasso"
@@ -98,6 +105,14 @@ Item {
   property real loadingElapsedSec: 0
   readonly property var spinnerFrames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
+  // Local session history & Resume Last state
+  property string sessionId: ""
+  property bool historyEnabled: true
+  property var latestHistorySession: null
+  property string pendingResumeId: ""
+  property bool pendingResumeLast: false
+  property string pendingHistorySaveJson: ""
+
   // Superwhisper voice state: "idle" | "recording" | "transcribing"
   property string voiceState: "idle"
   property string voiceBaseline: ""
@@ -157,6 +172,14 @@ Item {
   function open(payloadJson) {
     var launch = Logic.parseLaunchPayload(payloadJson)
     if (root.opened) {
+      if (launch.resumeId) {
+        root.loadHistorySessionById(launch.resumeId)
+        return
+      }
+      if (launch.resumeLast && root.latestHistorySession) {
+        root.restoreHistorySession(root.latestHistorySession)
+        return
+      }
       if (launch.voice) {
         if (root.voiceState === "recording") {
           root.toggleVoice()
@@ -173,6 +196,8 @@ Item {
     if (root.capturing) return
 
     root.resetSession()
+    root.pendingResumeId = launch.resumeId
+    root.pendingResumeLast = launch.resumeLast
     root.voiceLaunchPending = launch.voice
     if (launch.voice) {
       root.voiceAutoSubmitExplicit = (launch.autoSubmit !== null)
@@ -211,6 +236,13 @@ Item {
     root.imageHeight = 0
     root.windowClass = ""
     root.windowTitle = ""
+    root.liveScreenshotPath = ""
+    root.liveImageWidth = 0
+    root.liveImageHeight = 0
+    root.liveWindowClass = ""
+    root.liveWindowTitle = ""
+    root.resumedFrameActive = false
+    root.sessionFrameReplaced = false
     root.mode = "lasso"
     root.lassoPoints = []
     root.lassoPathPoints = []
@@ -245,6 +277,10 @@ Item {
     root.answerUsedWebSearch = false
     root.errorMessage = ""
     root.toastMessage = ""
+    root.sessionId = ""
+    root.latestHistorySession = null
+    root.pendingResumeId = ""
+    root.pendingResumeLast = false
     root.voiceState = "idle"
     root.voiceBaseline = ""
     root.voicePromptBefore = ""
@@ -442,13 +478,110 @@ Item {
 
   function cancelStreaming() {
     if (askProc.running) askProc.running = false
-    if (root.streamingText.trim().length > 0) {
+    var hadPartial = root.streamingText.trim().length > 0
+    if (hadPartial) {
       var nextMessages = root.messages.slice()
       nextMessages.push({ role: "assistant", text: root.streamingText })
       root.messages = nextMessages
     }
     root.streaming = false
     root.streamingText = ""
+    if (hadPartial) root.saveCurrentSession()
+  }
+
+  function saveCurrentSession() {
+    if (!root.historyEnabled) return
+    if (!Array.isArray(root.messages) || root.messages.length === 0) return
+    var payload = {
+      id: root.sessionId,
+      windowClass: root.windowClass,
+      windowTitle: root.windowTitle,
+      providerLabel: root.providerLabel,
+      webSearch: root.answerUsedWebSearch,
+      selectedText: root.selectedText,
+      imagePath: root.screenshotPath,
+      replaceFrame: root.sessionFrameReplaced,
+      messages: root.messages
+    }
+    root.sessionFrameReplaced = false
+    root.pendingHistorySaveJson = JSON.stringify(payload)
+    historySaveProc.running = false
+    historySaveProc.running = true
+  }
+
+  function loadHistorySessionById(sid) {
+    var clean = String(sid || "").trim()
+    if (!clean) return
+    historyGetProc.command = ["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "get", clean]
+    historyGetProc.running = false
+    historyGetProc.running = true
+  }
+
+  function switchToLiveScreen(silent) {
+    if (!root.liveScreenshotPath) return
+    var wasResumed = root.resumedFrameActive
+    root.resumedFrameActive = false
+    root.screenshotPath = root.liveScreenshotPath
+    root.imageWidth = root.liveImageWidth
+    root.imageHeight = root.liveImageHeight
+    root.windowClass = root.liveWindowClass
+    root.windowTitle = root.liveWindowTitle
+    if (wasResumed && root.sessionId) {
+      root.sessionFrameReplaced = true
+    }
+    root.clearSelection()
+    root.rawOcrWords = []
+    root.ocrWords = []
+    root.rawOcrCodes = []
+    root.ocrCodes = []
+    root.ocrLoading = true
+    ocrProc.command = ["/usr/bin/python3", root.pluginDir + "/scripts/ocr.py", root.screenshotPath]
+    ocrProc.running = false
+    ocrProc.running = true
+    if (!silent) {
+      root.showToast(strings.t("status.switchedLiveScreen"))
+    }
+    promptField.forceActiveFocus()
+  }
+
+  function restoreHistorySession(sess) {
+    if (!sess || !Array.isArray(sess.messages) || sess.messages.length === 0) return
+    root.cancelStreaming()
+    root.sessionId = String(sess.id || "")
+    root.messages = sess.messages.slice()
+    root.providerLabel = String(sess.providerLabel || "")
+    root.answerUsedWebSearch = (sess.webSearch === true)
+    root.sessionFrameReplaced = false
+    root.errorMessage = ""
+
+    var savedFrame = String(sess.framePath || sess.thumbPath || "")
+    if (savedFrame) {
+      root.screenshotPath = savedFrame
+      root.imageWidth = Number(sess.frameWidth) || 0
+      root.imageHeight = Number(sess.frameHeight) || 0
+      root.windowClass = String(sess.windowClass || "")
+      root.windowTitle = String(sess.windowTitle || "")
+      root.resumedFrameActive = true
+      root.clearSelection()
+      root.rawOcrWords = []
+      root.ocrWords = []
+      root.rawOcrCodes = []
+      root.ocrCodes = []
+      root.ocrLoading = true
+      ocrProc.command = ["/usr/bin/python3", root.pluginDir + "/scripts/ocr.py", savedFrame]
+      ocrProc.running = false
+      ocrProc.running = true
+      if (sess.selectedText) root.selectedText = String(sess.selectedText)
+      root.showToast(strings.t("status.resumedSession"))
+    } else {
+      root.resumedFrameActive = false
+      if (!root.selectedText && sess.selectedText) {
+        root.selectedText = String(sess.selectedText)
+      }
+      root.showToast(strings.t("status.resumedTextOnly"))
+    }
+    Qt.callLater(root.scrollAnswersToBottom)
+    promptField.forceActiveFocus()
   }
 
   function handleAskEvent(line) {
@@ -474,6 +607,7 @@ Item {
       }
       root.streaming = false
       root.streamingText = ""
+      root.saveCurrentSession()
       Qt.callLater(root.scrollAnswersToBottom)
     } else if (ev.type === "error") {
       root.streaming = false
@@ -784,6 +918,7 @@ Item {
         if (res && res.ok && res.config) {
           root.userConfig = res.config
           root.themeMode = String(res.config.theme || "system")
+          root.historyEnabled = (res.config.historyEnabled !== false)
           root.voiceAutoSubmitEnabled = (res.config.voiceAutoSubmit !== false)
           if (!root.voiceAutoSubmitExplicit && (root.voiceLaunchPending || root.voiceState === "recording")) {
             root.voiceAutoSubmitPending = root.voiceAutoSubmitEnabled
@@ -821,12 +956,27 @@ Item {
         root.imageHeight = Number(res.imageHeight) || 0
         root.windowClass = String(res.windowClass || "")
         root.windowTitle = String(res.windowTitle || "")
+        root.liveScreenshotPath = root.screenshotPath
+        root.liveImageWidth = root.imageWidth
+        root.liveImageHeight = root.imageHeight
+        root.liveWindowClass = root.windowClass
+        root.liveWindowTitle = root.windowTitle
+        root.resumedFrameActive = false
         root.opened = true
 
         root.ocrLoading = true
         ocrProc.command = ["/usr/bin/python3", root.pluginDir + "/scripts/ocr.py", root.screenshotPath]
         ocrProc.running = false
         ocrProc.running = true
+
+        if (root.pendingResumeId) {
+          var targetSid = root.pendingResumeId
+          root.pendingResumeId = ""
+          root.loadHistorySessionById(targetSid)
+        } else {
+          historyLatestProc.running = false
+          historyLatestProc.running = true
+        }
 
         Qt.callLater(function() {
           promptField.forceActiveFocus()
@@ -902,7 +1052,8 @@ Item {
     }
     onExited: function(code) {
       if (root.streaming) {
-        if (root.streamingText.length > 0) {
+        var hadPartial = root.streamingText.length > 0
+        if (hadPartial) {
           var nextMessages = root.messages.slice()
           nextMessages.push({ role: "assistant", text: root.streamingText })
           root.messages = nextMessages
@@ -911,6 +1062,62 @@ Item {
         }
         root.streaming = false
         root.streamingText = ""
+        if (hadPartial) root.saveCurrentSession()
+      }
+    }
+  }
+
+  Process {
+    id: historySaveProc
+    stdinEnabled: true
+    command: ["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "save", "-"]
+    onStarted: historySaveProc.write(root.pendingHistorySaveJson + "\n")
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var res = null
+        try { res = JSON.parse(text) } catch (e) { res = null }
+        if (res && res.ok && res.session && res.session.id) {
+          root.sessionId = String(res.session.id)
+          root.latestHistorySession = res.session
+        }
+      }
+    }
+  }
+
+  Process {
+    id: historyLatestProc
+    command: ["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "latest"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var res = null
+        try { res = JSON.parse(text) } catch (e) { res = null }
+        if (res && res.ok && res.session) {
+          root.latestHistorySession = res.session
+          if (root.pendingResumeLast) {
+            root.pendingResumeLast = false
+            root.restoreHistorySession(res.session)
+          }
+        } else {
+          root.latestHistorySession = null
+          root.pendingResumeLast = false
+        }
+      }
+    }
+  }
+
+  Process {
+    id: historyGetProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var res = null
+        try { res = JSON.parse(text) } catch (e) { res = null }
+        if (res && res.ok && res.session) {
+          root.latestHistorySession = res.session
+          root.restoreHistorySession(res.session)
+        }
       }
     }
   }
@@ -985,6 +1192,30 @@ Item {
 
     onWidthChanged: if (root.rawOcrWords.length > 0 || root.rawOcrCodes.length > 0) root.remapOcrWords()
     onHeightChanged: if (root.rawOcrWords.length > 0 || root.rawOcrCodes.length > 0) root.remapOcrWords()
+
+    // Durable resumed screenshot backdrop (only visible while viewing a resumed saved frame).
+    Rectangle {
+      anchors.fill: parent
+      visible: root.resumedFrameActive && root.screenshotPath.length > 0
+      color: "#000000"
+
+      Image {
+        anchors.fill: parent
+        source: root.resumedFrameActive && root.screenshotPath ? ("file://" + root.screenshotPath) : ""
+        fillMode: Image.PreserveAspectFit
+        cache: false
+        smooth: true
+        onStatusChanged: {
+          if (status === Image.Ready && implicitWidth > 0 && implicitHeight > 0) {
+            if (root.imageWidth <= 0 || root.imageHeight <= 0) {
+              root.imageWidth = implicitWidth
+              root.imageHeight = implicitHeight
+              if (root.rawOcrWords.length > 0 || root.rawOcrCodes.length > 0) root.remapOcrWords()
+            }
+          }
+        }
+      }
+    }
 
     // Canvas gesture MouseArea (handles lasso drawing, OCR text drag, and
     // interactive crop move/resize handles cleanly without MouseArea conflicts).
@@ -1546,6 +1777,31 @@ Item {
 
         Ui.Button {
           foreground: root.fgColor
+          visible: root.resumedFrameActive && root.liveScreenshotPath.length > 0
+          text: strings.t("action.useLiveScreen")
+          iconText: "󰊓"
+          fontSize: Style.font.bodySmall
+          tooltipText: strings.t("action.useLiveScreenTooltip")
+          onClicked: root.switchToLiveScreen(false)
+        }
+
+        Ui.Button {
+          foreground: root.fgColor
+          visible: !!root.latestHistorySession && root.messages.length === 0 && !root.streaming
+          text: strings.t("action.resumeLast")
+          iconText: "󰋚"
+          fontSize: Style.font.bodySmall
+          tooltipText: {
+            var base = strings.t("action.resumeLastTooltip")
+            if (!root.latestHistorySession) return base
+            var prev = Logic.sessionPreview(root.latestHistorySession)
+            return prev.title ? (base + " — " + prev.title.slice(0, 60)) : base
+          }
+          onClicked: if (root.latestHistorySession) root.restoreHistorySession(root.latestHistorySession)
+        }
+
+        Ui.Button {
+          foreground: root.fgColor
           iconText: "󰒓"
           tooltipText: strings.t("settings.openTooltip")
           onClicked: root.openSettings()
@@ -1748,9 +2004,11 @@ Item {
                 fontSize: Style.font.bodySmall
                 onClicked: {
                   root.cancelStreaming()
+                  root.sessionId = ""
                   root.messages = []
                   root.errorMessage = ""
                   root.answerUsedWebSearch = false
+                  if (root.resumedFrameActive) root.switchToLiveScreen(true)
                 }
               }
             }
@@ -2412,6 +2670,11 @@ Item {
                   event.accepted = true
                 } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_G) {
                   root.webSearchEnabled = !root.webSearchEnabled
+                  event.accepted = true
+                } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_H) {
+                  if (root.latestHistorySession && root.messages.length === 0 && !root.streaming) {
+                    root.restoreHistorySession(root.latestHistorySession)
+                  }
                   event.accepted = true
                 } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_M) {
                   root.toggleVoice()
