@@ -8,6 +8,7 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui as Ui
 import "ScreenLensLogic.js" as Logic
+import "ui" as SLUi
 
 Item {
   id: root
@@ -704,236 +705,6 @@ Item {
     }
   }
 
-  // ---------------------------------------------------------------- inline UI helpers
-
-  component FloatingShadow: Item {
-    id: shadowItem
-    property real radius: root.cornerRadius
-    z: -1
-
-    Rectangle {
-      x: 0
-      y: Style.space(6)
-      width: parent.width
-      height: parent.height
-      radius: shadowItem.radius
-      color: "#22000000"
-    }
-
-    Rectangle {
-      x: 0
-      y: Style.space(2)
-      width: parent.width
-      height: parent.height
-      radius: shadowItem.radius
-      color: "#36000000"
-    }
-  }
-
-  component KeyCap: Rectangle {
-    id: cap
-    property string label: ""
-    radius: Math.min(3, root.cornerRadius)
-    color: Util.alpha(root.fgColor, 0.06)
-    border.width: 1
-    border.color: Util.alpha(root.fgColor, 0.16)
-    implicitWidth: capText.implicitWidth + Style.space(8)
-    implicitHeight: capText.implicitHeight + Style.space(3)
-
-    PlainText {
-      id: capText
-      anchors.centerIn: parent
-      text: cap.label
-      color: Util.alpha(root.fgColor, 0.70)
-      font.family: root.uiFont
-      font.pixelSize: Math.max(9, Style.font.caption - 1)
-    }
-  }
-
-  component AnswerBlocks: Column {
-    id: blockCol
-    property var blocks: []
-    spacing: Style.spacing.xs
-
-    Repeater {
-      model: blockCol.blocks
-      delegate: Item {
-        required property var modelData
-        width: blockCol.width
-        implicitHeight: headingBlock.visible ? headingBlock.implicitHeight
-          : (subheadingBlock.visible ? subheadingBlock.implicitHeight
-          : (bulletBlock.visible ? bulletBlock.implicitHeight
-          : (codeBlock.visible ? codeBlock.implicitHeight : paraBlock.implicitHeight)))
-
-        PlainText {
-          id: headingBlock
-          visible: modelData.kind === "heading"
-          width: parent.width
-          topPadding: Style.space(2)
-          text: modelData.text
-          color: root.fgColor
-          font.family: root.uiFont
-          font.pixelSize: Style.font.subtitle
-          font.bold: true
-          wrapMode: Text.Wrap
-        }
-
-        PlainText {
-          id: subheadingBlock
-          visible: modelData.kind === "subheading"
-          width: parent.width
-          topPadding: Style.space(2)
-          text: modelData.text
-          color: root.fgColor
-          font.family: root.uiFont
-          font.pixelSize: Style.font.body
-          font.bold: true
-          wrapMode: Text.Wrap
-        }
-
-        Item {
-          id: bulletBlock
-          visible: modelData.kind === "bullet"
-          width: parent.width
-          implicitHeight: bulletBody.implicitHeight
-
-          PlainText {
-            id: bulletMarker
-            x: Style.space(2)
-            y: 0
-            text: modelData.lang || "•"
-            color: root.accentColor
-            font.family: root.uiFont
-            font.pixelSize: Style.font.body
-            font.bold: true
-          }
-
-          PlainText {
-            id: bulletBody
-            anchors.left: bulletMarker.right
-            anchors.leftMargin: Style.space(7)
-            anchors.right: parent.right
-            text: modelData.text
-            color: root.fgColor
-            font.family: root.uiFont
-            font.pixelSize: Style.font.body
-            wrapMode: Text.Wrap
-          }
-        }
-
-        Rectangle {
-          id: codeBlock
-          visible: modelData.kind === "code"
-          width: parent.width
-          radius: Math.min(4, root.cornerRadius)
-          color: Util.alpha(root.fgColor, 0.07)
-          border.width: 1
-          border.color: root.hairlineColor
-          implicitHeight: codeHeader.implicitHeight + codeContent.implicitHeight + Style.spacing.sm * 2 + Style.space(6)
-
-          Item {
-            id: codeHeader
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            anchors.leftMargin: Style.spacing.sm
-            anchors.rightMargin: Style.spacing.xs
-            anchors.topMargin: Style.space(4)
-            implicitHeight: Math.max(codeLangLabel.implicitHeight, copyCodeBtn.implicitHeight)
-
-            PlainText {
-              id: codeLangLabel
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-              text: (modelData.lang || "code").toUpperCase()
-              color: root.mutedInk
-              font.family: root.uiFont
-              font.pixelSize: Style.font.caption
-              font.bold: true
-              font.letterSpacing: 0.8
-            }
-
-            Rectangle {
-              id: copyCodeBtn
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              radius: Math.min(3, root.cornerRadius)
-              color: copyCodeHover.hovered ? root.hoverFill : "transparent"
-              border.width: copyCodeHover.hovered ? 1 : 0
-              border.color: root.hairlineColor
-              implicitWidth: copyCodeRow.implicitWidth + Style.space(10)
-              implicitHeight: copyCodeRow.implicitHeight + Style.space(4)
-
-              Row {
-                id: copyCodeRow
-                anchors.centerIn: parent
-                spacing: Style.space(4)
-
-                PlainText {
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: "󰆏"
-                  color: copyCodeHover.hovered ? root.accentColor : root.mutedInk
-                  font.family: root.uiFont
-                  font.pixelSize: Style.font.caption
-                }
-
-                PlainText {
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: strings.t("action.copy")
-                  color: copyCodeHover.hovered ? root.fgColor : root.mutedInk
-                  font.family: root.uiFont
-                  font.pixelSize: Style.font.caption
-                }
-              }
-
-              HoverHandler { id: copyCodeHover; cursorShape: Qt.PointingHandCursor }
-              MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.copyText(modelData.text)
-              }
-            }
-          }
-
-          Rectangle {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: codeHeader.bottom
-            anchors.topMargin: Style.space(3)
-            height: 1
-            color: Util.alpha(root.fgColor, 0.08)
-          }
-
-          PlainText {
-            id: codeContent
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: codeHeader.bottom
-            anchors.topMargin: Style.spacing.sm + Style.space(2)
-            anchors.leftMargin: Style.spacing.sm
-            anchors.rightMargin: Style.spacing.sm
-            text: modelData.text
-            color: root.fgColor
-            font.family: root.uiFont
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.WrapAnywhere
-          }
-        }
-
-        PlainText {
-          id: paraBlock
-          visible: modelData.kind !== "heading" && modelData.kind !== "subheading" && modelData.kind !== "bullet" && modelData.kind !== "code"
-          width: parent.width
-          text: modelData.text
-          color: root.fgColor
-          font.family: root.uiFont
-          font.pixelSize: Style.font.body
-          wrapMode: Text.Wrap
-        }
-      }
-    }
-  }
-
   // ---------------------------------------------------------------- overlay UI
 
   Ui.OverlayWindow {
@@ -944,184 +715,24 @@ Item {
     onWidthChanged: if (root.rawOcrWords.length > 0) root.remapOcrWords()
     onHeightChanged: if (root.rawOcrWords.length > 0) root.remapOcrWords()
 
-    // Four dim strips framing the selected region so the cutout stays crystal-clear.
-    // Leaving the unselected surface un-tinted keeps the live screen crisp and
-    // avoids fullscreen opaque-region quirks on Wayland layer-shell surfaces.
-    Item {
+    SLUi.CropOverlay {
       id: cropOverlay
       anchors.fill: parent
-      visible: !!root.selectionRect
-      readonly property real rx: root.selectionRect ? root.selectionRect.x : 0
-      readonly property real ry: root.selectionRect ? root.selectionRect.y : 0
-      readonly property real rw: root.selectionRect ? root.selectionRect.w : 0
-      readonly property real rh: root.selectionRect ? root.selectionRect.h : 0
-      readonly property var imgCrop: root.currentImageCrop()
-
-      Rectangle { x: 0; y: 0; width: parent.width; height: Math.max(0, parent.ry); color: root.scrimColor }
-      Rectangle { x: 0; y: parent.ry + parent.rh; width: parent.width; height: Math.max(0, parent.height - (parent.ry + parent.rh)); color: root.scrimColor }
-      Rectangle { x: 0; y: parent.ry; width: Math.max(0, parent.rx); height: parent.rh; color: root.scrimColor }
-      Rectangle { x: parent.rx + parent.rw; y: parent.ry; width: Math.max(0, parent.width - (parent.rx + parent.rw)); height: parent.rh; color: root.scrimColor }
-
-      // Soft outer accent halo around the locked crop cutout.
-      Rectangle {
-        x: parent.rx - 3
-        y: parent.ry - 3
-        width: parent.rw + 6
-        height: parent.rh + 6
-        radius: Math.min(6, root.cornerRadius + 2)
-        color: "transparent"
-        border.width: 4
-        border.color: Util.alpha(root.accentColor, 0.24)
-      }
-
-      // Crisp inner hairline + machined corner L-brackets.
-      Rectangle {
-        x: parent.rx
-        y: parent.ry
-        width: parent.rw
-        height: parent.rh
-        radius: Math.min(4, root.cornerRadius)
-        color: "transparent"
-        border.width: 1
-        border.color: Util.alpha(root.accentColor, 0.88)
-
-        readonly property real tick: Math.min(18, Math.max(8, Math.min(width / 3, height / 3)))
-        readonly property real arm: 3
-        readonly property real capRadius: Math.min(2, root.cornerRadius)
-
-        // Top-left bracket
-        Rectangle { x: -1; y: -1; width: parent.tick; height: parent.arm; radius: parent.capRadius; color: root.accentColor }
-        Rectangle { x: -1; y: -1; width: parent.arm; height: parent.tick; radius: parent.capRadius; color: root.accentColor }
-        // Top-right bracket
-        Rectangle { x: parent.width - parent.tick + 1; y: -1; width: parent.tick; height: parent.arm; radius: parent.capRadius; color: root.accentColor }
-        Rectangle { x: parent.width - parent.arm + 1; y: -1; width: parent.arm; height: parent.tick; radius: parent.capRadius; color: root.accentColor }
-        // Bottom-left bracket
-        Rectangle { x: -1; y: parent.height - parent.arm + 1; width: parent.tick; height: parent.arm; radius: parent.capRadius; color: root.accentColor }
-        Rectangle { x: -1; y: parent.height - parent.tick + 1; width: parent.arm; height: parent.tick; radius: parent.capRadius; color: root.accentColor }
-        // Bottom-right bracket
-        Rectangle { x: parent.width - parent.tick + 1; y: parent.height - parent.arm + 1; width: parent.tick; height: parent.arm; radius: parent.capRadius; color: root.accentColor }
-        Rectangle { x: parent.width - parent.arm + 1; y: parent.height - parent.tick + 1; width: parent.arm; height: parent.tick; radius: parent.capRadius; color: root.accentColor }
-      }
-
-      // Compact floating pixel dimension badge tucked at top-left of the crop.
-      Rectangle {
-        visible: !!parent.imgCrop && parent.rw >= 64
-        x: Logic.clamp(parent.rx, Style.gapsOut, Math.max(Style.gapsOut, panel.width - width - Style.gapsOut))
-        y: parent.ry > height + Style.space(12) ? (parent.ry - height - Style.space(6)) : (parent.ry + Style.space(6))
-        radius: Math.min(4, root.cornerRadius)
-        color: Util.alpha(root.bgColor, 0.90)
-        border.width: 1
-        border.color: Util.alpha(root.accentColor, 0.45)
-        implicitWidth: dimLabel.implicitWidth + Style.space(12)
-        implicitHeight: dimLabel.implicitHeight + Style.space(5)
-
-        PlainText {
-          id: dimLabel
-          anchors.centerIn: parent
-          text: cropOverlay.imgCrop
-            ? (Commons.I18n.formatNumber(cropOverlay.imgCrop.w) + " × " + Commons.I18n.formatNumber(cropOverlay.imgCrop.h))
-            : ""
-          color: root.accentColor
-          font.family: root.uiFont
-          font.pixelSize: Style.font.caption
-          font.bold: true
-        }
-      }
+      selectionRect: root.selectionRect
+      imgCrop: root.currentImageCrop()
+      scrimColor: root.scrimColor
+      accentColor: root.accentColor
+      bgColor: root.bgColor
+      cornerRadius: root.cornerRadius
+      uiFont: root.uiFont
     }
 
-    // Superwhisper-inspired feathered inward-fading edge glow around the active monitor.
-    // Uses 4 directional GPU gradients + a crisp luminous inner rim (zero Canvas/FBO).
-    Item {
+    SLUi.EdgeGlow {
       id: edgeGlow
       anchors.fill: parent
-      property color glowColor: root.voiceState === "recording" ? root.urgentColor : root.accentColor
-      readonly property bool activeBoost: root.draggingCanvas || root.streaming || root.voiceState === "recording"
-      readonly property real depth: activeBoost ? Style.space(42) : Style.space(32)
-      property real breath: 1.0
-
-      Behavior on glowColor {
-        ColorAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic }
-      }
-
-      SequentialAnimation on breath {
-        running: root.opened && !Style.reduceMotion
-        loops: Animation.Infinite
-        NumberAnimation { to: 0.74; duration: Style.duration(1500); easing.type: Easing.InOutSine }
-        NumberAnimation { to: 1.0; duration: Style.duration(1500); easing.type: Easing.InOutSine }
-      }
-
-      opacity: root.opened ? ((activeBoost ? 1.0 : 0.84) * (Style.reduceMotion ? 1.0 : breath)) : 0
-      Behavior on opacity {
-        NumberAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic }
-      }
-
-      // Top feathered glow
-      Rectangle {
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        height: edgeGlow.depth
-        gradient: Gradient {
-          orientation: Gradient.Vertical
-          GradientStop { position: 0.0; color: Util.alpha(edgeGlow.glowColor, 0.34) }
-          GradientStop { position: 0.22; color: Util.alpha(edgeGlow.glowColor, 0.14) }
-          GradientStop { position: 0.58; color: Util.alpha(edgeGlow.glowColor, 0.035) }
-          GradientStop { position: 1.0; color: "transparent" }
-        }
-      }
-
-      // Bottom feathered glow
-      Rectangle {
-        anchors.bottom: parent.bottom
-        anchors.left: parent.left
-        anchors.right: parent.right
-        height: edgeGlow.depth
-        gradient: Gradient {
-          orientation: Gradient.Vertical
-          GradientStop { position: 0.0; color: "transparent" }
-          GradientStop { position: 0.42; color: Util.alpha(edgeGlow.glowColor, 0.035) }
-          GradientStop { position: 0.78; color: Util.alpha(edgeGlow.glowColor, 0.14) }
-          GradientStop { position: 1.0; color: Util.alpha(edgeGlow.glowColor, 0.34) }
-        }
-      }
-
-      // Left feathered glow
-      Rectangle {
-        anchors.left: parent.left
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        width: edgeGlow.depth
-        gradient: Gradient {
-          orientation: Gradient.Horizontal
-          GradientStop { position: 0.0; color: Util.alpha(edgeGlow.glowColor, 0.34) }
-          GradientStop { position: 0.22; color: Util.alpha(edgeGlow.glowColor, 0.14) }
-          GradientStop { position: 0.58; color: Util.alpha(edgeGlow.glowColor, 0.035) }
-          GradientStop { position: 1.0; color: "transparent" }
-        }
-      }
-
-      // Right feathered glow
-      Rectangle {
-        anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        width: edgeGlow.depth
-        gradient: Gradient {
-          orientation: Gradient.Horizontal
-          GradientStop { position: 0.0; color: "transparent" }
-          GradientStop { position: 0.42; color: Util.alpha(edgeGlow.glowColor, 0.035) }
-          GradientStop { position: 0.78; color: Util.alpha(edgeGlow.glowColor, 0.14) }
-          GradientStop { position: 1.0; color: Util.alpha(edgeGlow.glowColor, 0.34) }
-        }
-      }
-
-      // Crisp luminous perimeter hairline
-      Rectangle {
-        anchors.fill: parent
-        color: "transparent"
-        border.width: 2
-        border.color: Util.alpha(edgeGlow.glowColor, 0.62)
-      }
+      opened: root.opened
+      glowColor: root.voiceState === "recording" ? root.urgentColor : root.accentColor
+      activeBoost: root.draggingCanvas || root.streaming || root.voiceState === "recording"
     }
 
     // Native Qt Quick OCR word highlight boxes (visible only in Select Text mode).
@@ -1286,7 +897,7 @@ Item {
             : Math.min(panel.height - dockContainer.height - height - Style.space(24), anchorBounds.y + anchorBounds.h + Style.space(8)))
         : 0
 
-      FloatingShadow { anchors.fill: parent; radius: selectionBar.radius }
+      SLUi.FloatingShadow { anchors.fill: parent; radius: selectionBar.radius }
 
       Row {
         id: selectionRow
@@ -1360,7 +971,7 @@ Item {
       Behavior on opacity { NumberAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic } }
       Behavior on scale { NumberAnimation { duration: Style.duration(180); easing.type: Easing.Bezier; easing.bezierCurve: Style.easeOut } }
 
-      FloatingShadow { anchors.fill: parent; radius: topBar.radius }
+      SLUi.FloatingShadow { anchors.fill: parent; radius: topBar.radius }
       MouseArea { anchors.fill: parent; onClicked: {} }
 
       Row {
@@ -1568,7 +1179,7 @@ Item {
         implicitWidth: toastRow.implicitWidth + Style.spacing.md * 2
         implicitHeight: toastRow.implicitHeight + Style.spacing.xs * 2 + Style.space(2)
 
-        FloatingShadow { anchors.fill: parent; radius: toastPill.radius }
+        SLUi.FloatingShadow { anchors.fill: parent; radius: toastPill.radius }
 
         Row {
           id: toastRow
@@ -1611,7 +1222,7 @@ Item {
           + Style.spacing.sm * 2
           + Border.top(borderSpec) + Border.bottom(borderSpec)
 
-        FloatingShadow { anchors.fill: parent; radius: answerCard.radius }
+        SLUi.FloatingShadow { anchors.fill: parent; radius: answerCard.radius }
         MouseArea { anchors.fill: parent; onClicked: {} }
 
         Column {
@@ -1769,7 +1380,7 @@ Item {
                     wrapMode: Text.Wrap
                   }
 
-                  AnswerBlocks {
+                  SLUi.AnswerBlocks {
                     id: assistantBlocks
                     visible: !parent.isUser
                     anchors.left: parent.left
@@ -1779,6 +1390,15 @@ Item {
                     anchors.rightMargin: Style.spacing.md
                     anchors.topMargin: Style.spacing.sm + Style.space(2)
                     blocks: parent.isUser ? [] : Logic.parseAnswerBlocks(modelData.text)
+                    fgColor: root.fgColor
+                    accentColor: root.accentColor
+                    hairlineColor: root.hairlineColor
+                    hoverFill: root.hoverFill
+                    mutedInk: root.mutedInk
+                    cornerRadius: root.cornerRadius
+                    uiFont: root.uiFont
+                    copyLabel: strings.t("action.copy")
+                    onCopyRequested: function(txt) { root.copyText(txt) }
                   }
                 }
               }
@@ -1886,7 +1506,7 @@ Item {
                 border.color: Util.alpha(root.accentColor, 0.28)
                 implicitHeight: streamBlocks.implicitHeight + Style.spacing.sm * 2 + Style.space(4)
 
-                AnswerBlocks {
+                SLUi.AnswerBlocks {
                   id: streamBlocks
                   anchors.left: parent.left
                   anchors.right: parent.right
@@ -1895,6 +1515,15 @@ Item {
                   anchors.rightMargin: Style.spacing.md
                   anchors.topMargin: Style.spacing.sm + Style.space(2)
                   blocks: root.streamingText.length > 0 ? Logic.parseAnswerBlocks(root.streamingText) : []
+                  fgColor: root.fgColor
+                  accentColor: root.accentColor
+                  hairlineColor: root.hairlineColor
+                  hoverFill: root.hoverFill
+                  mutedInk: root.mutedInk
+                  cornerRadius: root.cornerRadius
+                  uiFont: root.uiFont
+                  copyLabel: strings.t("action.copy")
+                  onCopyRequested: function(txt) { root.copyText(txt) }
                 }
               }
 
@@ -1959,7 +1588,7 @@ Item {
             implicitWidth: chipRow.implicitWidth + Style.space(18)
             implicitHeight: Style.space(28)
 
-            FloatingShadow { anchors.fill: parent; radius: chipRect.radius }
+            SLUi.FloatingShadow { anchors.fill: parent; radius: chipRect.radius }
 
             Row {
               id: chipRow
@@ -1982,9 +1611,12 @@ Item {
                 font.pixelSize: Style.font.bodySmall
               }
 
-              KeyCap {
+              SLUi.KeyCap {
                 anchors.verticalCenter: parent.verticalCenter
                 label: modelData.key
+                fgColor: root.fgColor
+                cornerRadius: root.cornerRadius
+                uiFont: root.uiFont
               }
             }
 
@@ -2008,7 +1640,7 @@ Item {
         padding: Style.spacing.md
         implicitHeight: promptColumn.implicitHeight + padding * 2 + Border.top(borderSpec) + Border.bottom(borderSpec)
 
-        FloatingShadow { anchors.fill: parent; radius: promptBar.radius }
+        SLUi.FloatingShadow { anchors.fill: parent; radius: promptBar.radius }
         MouseArea { anchors.fill: parent; onClicked: {} }
 
         Column {
@@ -2111,7 +1743,7 @@ Item {
 
               Row {
                 spacing: Style.space(4)
-                KeyCap { anchors.verticalCenter: parent.verticalCenter; label: "Tab" }
+                SLUi.KeyCap { anchors.verticalCenter: parent.verticalCenter; label: "Tab"; fgColor: root.fgColor; cornerRadius: root.cornerRadius; uiFont: root.uiFont }
                 PlainText {
                   anchors.verticalCenter: parent.verticalCenter
                   text: "Mode"
@@ -2123,7 +1755,7 @@ Item {
 
               Row {
                 spacing: Style.space(4)
-                KeyCap { anchors.verticalCenter: parent.verticalCenter; label: "Ctrl+M" }
+                SLUi.KeyCap { anchors.verticalCenter: parent.verticalCenter; label: "Ctrl+M"; fgColor: root.fgColor; cornerRadius: root.cornerRadius; uiFont: root.uiFont }
                 PlainText {
                   anchors.verticalCenter: parent.verticalCenter
                   text: "Voice"
@@ -2135,7 +1767,7 @@ Item {
 
               Row {
                 spacing: Style.space(4)
-                KeyCap { anchors.verticalCenter: parent.verticalCenter; label: "Esc" }
+                SLUi.KeyCap { anchors.verticalCenter: parent.verticalCenter; label: "Esc"; fgColor: root.fgColor; cornerRadius: root.cornerRadius; uiFont: root.uiFont }
                 PlainText {
                   anchors.verticalCenter: parent.verticalCenter
                   text: "Close"
