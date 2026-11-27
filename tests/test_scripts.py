@@ -80,6 +80,39 @@ class ScreenLensTests(unittest.TestCase):
             joined = " ".join(w["text"] for w in data["words"]).upper()
             self.assertIn("OMARCHY", joined)
 
+            # Verify cropped --text-only extraction
+            crop_proc = subprocess.run(
+                [
+                    "python3",
+                    os.path.join(ROOT_DIR, "scripts/ocr.py"),
+                    img_path,
+                    "--crop",
+                    "50,20,500,160",
+                    "--text-only",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            crop_data = json.loads(crop_proc.stdout)
+            self.assertTrue(crop_data["ok"])
+            self.assertIn("OMARCHY", crop_data["text"].upper())
+
+            # Verify multi-PSM fallback triggers when psm 6 returns empty
+            calls = []
+            orig_run = ocr_mod.run_tesseract_text
+
+            def fake_run(tess_input, input_bytes, langs, psm):
+                calls.append(psm)
+                return "" if len(calls) < 2 else "FALLBACK TEXT"
+
+            ocr_mod.run_tesseract_text = fake_run
+            try:
+                self.assertEqual(ocr_mod.extract_text_with_fallbacks(img_path, (50, 20, 500, 160), "eng"), "FALLBACK TEXT")
+                self.assertEqual(calls, ["6", "3"])
+            finally:
+                ocr_mod.run_tesseract_text = orig_run
+
             # Verify ask.py image crop preparation
             cropped_bytes, mime, saved = ask_mod.prepare_image(
                 img_path, {"x": 50, "y": 20, "w": 400, "h": 140}

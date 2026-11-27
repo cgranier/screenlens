@@ -65,17 +65,63 @@ def parse_tsv(tsv_text: str) -> list[dict]:
     return words
 
 
-def cropped_png_bytes(image_path: str, crop: tuple[int, int, int, int]) -> bytes:
+def cropped_png_bytes(image_path: str, crop: tuple[int, int, int, int], upscale: bool = False) -> bytes:
     x, y, w, h = crop
     geometry = f"{w}x{h}+{x}+{y}"
-    proc = subprocess.run(
-        ["magick", image_path, "-crop", geometry, "+repage", "png:-"],
-        capture_output=True,
-        timeout=10,
-    )
+    cmd = ["magick", image_path, "-crop", geometry, "+repage"]
+    if upscale:
+        cmd.extend(["-resize", "200%"])
+    cmd.append("png:-")
+    proc = subprocess.run(cmd, capture_output=True, timeout=10)
     if proc.returncode != 0:
         raise RuntimeError(proc.stderr.decode("utf-8", "replace").strip() or "magick crop failed")
     return proc.stdout
+
+
+def run_tesseract_text(tess_input: str, input_bytes: bytes | None, langs: str, psm: str) -> str:
+    cmd = [
+        "tesseract",
+        tess_input,
+        "stdout",
+        "--oem",
+        "1",
+        "--psm",
+        psm,
+        "-l",
+        langs,
+        "--dpi",
+        "300",
+        "-c",
+        "preserve_interword_spaces=1",
+    ]
+    proc = subprocess.run(cmd, input=input_bytes, capture_output=True, timeout=20)
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", "replace").strip() or "tesseract failed"
+        raise RuntimeError(err)
+    return proc.stdout.decode("utf-8", "replace").strip()[:MAX_TEXT_CHARS]
+
+
+def extract_text_with_fallbacks(
+    image_path: str,
+    crop_tuple: tuple[int, int, int, int] | None,
+    langs: str,
+) -> str:
+    if crop_tuple is None:
+        return run_tesseract_text(image_path, None, langs, "3")
+
+    raw_bytes = cropped_png_bytes(image_path, crop_tuple, upscale=False)
+    for psm in ("6", "3", "11"):
+        text = run_tesseract_text("stdin", raw_bytes, langs, psm)
+        if text:
+            return text
+
+    # Fallback pass: 2x upscale helps Tesseract read small or tightly cropped UI text.
+    up_bytes = cropped_png_bytes(image_path, crop_tuple, upscale=True)
+    for psm in ("6", "11"):
+        text = run_tesseract_text("stdin", up_bytes, langs, psm)
+        if text:
+            return text
+    return ""
 
 
 def main() -> int:
@@ -103,39 +149,29 @@ def main() -> int:
     langs = langs or "eng"
 
     try:
-        input_bytes = None
-        tess_input = args.image
-        if args.crop:
-            crop_tuple = parse_crop(args.crop)
-            input_bytes = cropped_png_bytes(args.image, crop_tuple)
-            tess_input = "stdin"
+        crop_tuple = parse_crop(args.crop) if args.crop else None
 
         if args.text_only:
-            cmd = [
-                "tesseract",
-                tess_input,
-                "stdout",
-                "--oem",
-                "1",
-                "--psm",
-                "6" if args.crop else "3",
-                "-l",
-                langs,
-                "--dpi",
-                "300",
-                "-c",
-                "preserve_interword_spaces=1",
-            ]
-            proc = subprocess.run(cmd, input=input_bytes, capture_output=True, timeout=20)
-            if proc.returncode != 0:
-                err = proc.stderr.decode("utf-8", "replace").strip() or "tesseract failed"
-                print(json.dumps({"ok": False, "error": err}), flush=True)
-                return 1
-            text = proc.stdout.decode("utf-8", "replace").strip()[:MAX_TEXT_CHARS]
+            text = extract_text_with_fallbacks(args.image, crop_tuple, langs)
             if args.copy and text:
-                subprocess.run(["wl-copy"], input=text.encode("utf-8"), timeout=5, check=False)
+                try:
+                    # Detach stdio so wl-copy's forked Wayland clipboard daemon
+                    # never holds stdout open or fails JSON extraction output.
+                    subprocess.run(
+                        ["wl-copy"],
+                        input=text.encode("utf-8"),
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=5,
+                        check=False,
+                    )
+                except Exception:
+                    pass
             print(json.dumps({"ok": True, "text": text}), flush=True)
             return 0
+
+        input_bytes = cropped_png_bytes(args.image, crop_tuple) if crop_tuple else None
+        tess_input = "stdin" if crop_tuple else args.image
 
         cmd = [
             "tesseract",
