@@ -21,6 +21,8 @@ cp "$ROOT_DIR/PlainText.qml" "$STAGE_DIR/"
 cp "$ROOT_DIR/ScreenLensLogic.js" "$STAGE_DIR/"
 cp -R "$ROOT_DIR/scripts" "$STAGE_DIR/"
 cp -R "$ROOT_DIR/i18n" "$STAGE_DIR/"
+cp -R "$ROOT_DIR/ui" "$STAGE_DIR/"
+cp -R "$ROOT_DIR/tabs" "$STAGE_DIR/"
 chmod +x "$STAGE_DIR"/setup.sh "$STAGE_DIR"/scripts/*.py
 
 omarchy plugin validate "$STAGE_DIR"

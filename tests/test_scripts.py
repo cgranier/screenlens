@@ -292,7 +292,14 @@ class ScreenLensTests(unittest.TestCase):
                 os.unlink(direct["contextPath"])
 
     def test_qml_ui_safety_and_motion_conventions(self):
-        for rel in ("ScreenLens.qml", "SettingsPanel.qml"):
+        qml_files = []
+        for dirpath, dirnames, filenames in os.walk(ROOT_DIR):
+            dirnames[:] = [d for d in dirnames if d not in (".git", "__pycache__")]
+            for fname in sorted(filenames):
+                if fname.endswith(".qml") and fname != "PlainText.qml":
+                    qml_files.append(os.path.relpath(os.path.join(dirpath, fname), ROOT_DIR))
+        self.assertGreaterEqual(len(qml_files), 10, f"Expected modular QML files, found {qml_files}")
+        for rel in qml_files:
             with open(os.path.join(ROOT_DIR, rel), "r", encoding="utf-8") as f:
                 qml = f.read()
             # No raw Text elements allowed — must use PlainText wrapper.
