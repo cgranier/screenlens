@@ -64,6 +64,10 @@ assert.equal(forwardSel.bounds.y, 50)
 const reverseSel = sandbox.selectWordsBetween(mapped, 2, 1, null)
 assert.equal(reverseSel.text, "Omarchy\nworld!")
 
+const rectExtract = sandbox.extractWordsInRect(mapped, { x: 45, y: 45, w: 120, h: 20 })
+assert.equal(rectExtract.text, "Hello Omarchy")
+assert.deepEqual(plain(rectExtract.indices), [0, 1])
+
 // 5. Agent handoff prompt formatting
 const handoff = sandbox.buildAgentHandoffPrompt({
   windowClass: "chromium",
