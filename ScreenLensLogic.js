@@ -311,98 +311,310 @@ function detectErrorSignal(text, windowClass) {
   return score >= 2
 }
 
-// Detects tabular layouts from OCR word bounding boxes by clustering visual
-// rows, splitting columns on horizontal gutters, and checking column alignment.
-function detectTableLayout(words) {
+// Detects tabular layouts from OCR word bounding boxes by extracting aligned
+// vertical column tracks (left- or right-aligned), verifying a contiguous run
+// of evenly spaced rows with no interleaved non-table rows (e.g. DM/inbox
+// preview lines), and rejecting multi-pane prose UIs.
+function detectTableLayout(words, opts) {
   if (!Array.isArray(words) || words.length < 6) return false
 
+  var o = opts || ({})
+  var hasSelection = Boolean(o.hasSelection)
+
   var valid = []
-  var totalH = 0
+  var heights = []
   for (var i = 0; i < words.length; i++) {
     var w = words[i]
-    if (!w || !w.text || !(w.h > 0) || !(w.w > 0)) continue
+    if (!w || !w.text || !String(w.text).trim() || !(w.h > 0) || !(w.w > 0)) continue
     valid.push(w)
-    totalH += w.h
+    heights.push(w.h)
   }
   if (valid.length < 6) return false
 
-  var avgH = Math.max(8, totalH / valid.length)
-  var rowTol = Math.max(8, avgH * 0.65)
-  var colGap = Math.max(18, avgH * 1.45)
+  heights.sort(function(a, b) { return a - b })
+  var medH = Math.max(8, heights[Math.floor(heights.length / 2)])
+  var rowTol = Math.max(6, medH * 0.6)
+  var colGap = Math.max(18, medH * 1.45)
+  var alignTol = Math.max(14, medH * 1.15)
+  var maxRowStep = Math.max(68, medH * 4.2)
+  var maxColGutter = Math.max(260, medH * 18)
 
-  // Sort top-to-bottom, then left-to-right.
+  // Strict top-to-bottom sort before clustering into visual rows.
   valid.sort(function(a, b) {
     var ay = a.y + a.h * 0.5
     var by = b.y + b.h * 0.5
-    if (Math.abs(ay - by) > rowTol) return ay - by
+    if (ay !== by) return ay - by
     return a.x - b.x
   })
 
-  // Cluster into visual rows.
-  var rows = []
+  // Cluster into visual rows, preserving ALL rows (including 1-column rows so
+  // interleaved preview/snippet lines in chat or inbox lists are detected).
+  var allRows = []
   for (var j = 0; j < valid.length; j++) {
     var word = valid[j]
     var cy = word.y + word.h * 0.5
-    var row = rows.length > 0 ? rows[rows.length - 1] : null
+    var row = allRows.length > 0 ? allRows[allRows.length - 1] : null
     if (!row || Math.abs(cy - row.cy) > rowTol) {
-      rows.push({ cy: cy, words: [word] })
+      allRows.push({ cy: cy, words: [word] })
     } else {
       row.words.push(word)
     }
   }
-  if (rows.length < 3) return false
+  if (allRows.length < 3) return false
 
-  // Split each row into separated column cells.
-  var multiColRows = []
-  var numericCells = 0
-  for (var r = 0; r < rows.length; r++) {
-    var rw = rows[r].words
+  // Split each row into horizontal cells and classify cell compactness/data.
+  var compactCells = []
+  for (var r = 0; r < allRows.length; r++) {
+    var rw = allRows[r].words
     rw.sort(function(a, b) { return a.x - b.x })
-    var cells = [{ x: rw[0].x, x2: rw[0].x + rw[0].w, text: rw[0].text }]
-    for (var k = 1; k < rw.length; k++) {
-      var prev = cells[cells.length - 1]
+    var cells = []
+    var rowMinX = Infinity
+    var rowMaxX2 = -Infinity
+    var rowMaxWords = 0
+
+    for (var k = 0; k < rw.length; k++) {
       var cur = rw[k]
-      if (cur.x - prev.x2 >= colGap) {
-        cells.push({ x: cur.x, x2: cur.x + cur.w, text: cur.text })
+      var prev = cells.length > 0 ? cells[cells.length - 1] : null
+      if (!prev || cur.x - prev.x2 >= colGap) {
+        cells.push({
+          rowIdx: r,
+          cy: allRows[r].cy,
+          x: cur.x,
+          x2: cur.x + cur.w,
+          h: cur.h,
+          text: String(cur.text).trim(),
+          wordCount: 1
+        })
       } else {
         prev.x2 = Math.max(prev.x2, cur.x + cur.w)
-        prev.text += " " + cur.text
+        prev.h = Math.max(prev.h, cur.h)
+        prev.text += " " + String(cur.text).trim()
+        prev.wordCount += 1
       }
+      if (cur.x < rowMinX) rowMinX = cur.x
+      if (cur.x + cur.w > rowMaxX2) rowMaxX2 = cur.x + cur.w
     }
-    if (cells.length >= 2) {
-      multiColRows.push(cells)
-      for (var c = 0; c < cells.length; c++) {
-        if (/^[\$€£+\-]?\d[\d,.:%\/-]*$/.test(cells[c].text.trim())) {
-          numericCells++
+
+    for (var c = 0; c < cells.length; c++) {
+      var cell = cells[c]
+      var t = cell.text
+      if (cell.wordCount > rowMaxWords) rowMaxWords = cell.wordCount
+      cell.isNumeric = /^[\$€£¥+\-~≈]?\d[\d,.:%\/-]*[kKmMbB%]?(?:\/(?:mo|yr|hr|s))?$/i.test(t)
+      cell.isDatum = cell.isNumeric ||
+        /^(?:true|false|yes|no|n\/a|ok|pass|fail|active|pending|open|closed|done)$/i.test(t) ||
+        /^[A-Z]{2,5}$/.test(t)
+      cell.isProse = cell.wordCount >= 6 || t.length > 38
+      cell.isCompact = !cell.isProse && cell.h >= medH * 0.55 && cell.h <= medH * 1.9
+      if (cell.isCompact) compactCells.push(cell)
+    }
+
+    allRows[r].cells = cells
+    allRows[r].minX = rowMinX
+    allRows[r].maxX2 = rowMaxX2
+    allRows[r].maxWords = rowMaxWords
+  }
+
+  var minCols = hasSelection ? 2 : 3
+  if (compactCells.length < minCols * 3) return false
+
+  // Discover non-overlapping vertical column tracks (left- or right-aligned)
+  // backed by >= 3 distinct rows.
+  var usedCell = {}
+  var tracks = []
+  var safety = 0
+  while (safety < 24) {
+    safety++
+    var bestTrack = null
+
+    for (var ci = 0; ci < compactCells.length; ci++) {
+      if (usedCell[ci]) continue
+      var anchor = compactCells[ci]
+      var modes = ["left", "right"]
+      for (var mi = 0; mi < modes.length; mi++) {
+        var mode = modes[mi]
+        var anchorPos = mode === "left" ? anchor.x : anchor.x2
+        var byRow = {}
+        var members = []
+        for (var cj = 0; cj < compactCells.length; cj++) {
+          if (usedCell[cj]) continue
+          var cand = compactCells[cj]
+          var candPos = mode === "left" ? cand.x : cand.x2
+          var diff = Math.abs(candPos - anchorPos)
+          if (diff <= alignTol) {
+            var prevPick = byRow[cand.rowIdx]
+            if (!prevPick || diff < prevPick.diff) {
+              byRow[cand.rowIdx] = { idx: cj, cell: cand, diff: diff }
+            }
+          }
+        }
+        for (var rk in byRow) {
+          if (Object.prototype.hasOwnProperty.call(byRow, rk)) {
+            members.push(byRow[rk])
+          }
+        }
+        if (members.length < 3) continue
+        if (!bestTrack || members.length > bestTrack.members.length) {
+          bestTrack = { mode: mode, pos: anchorPos, members: members }
         }
       }
     }
-  }
-  if (multiColRows.length < 3) return false
 
-  // Verify vertical column alignment across >= 3 rows on column 2+ X-starts.
-  var alignTol = Math.max(24, avgH * 2.2)
-  var colStarts = []
-  for (var m = 0; m < multiColRows.length; m++) {
-    for (var col = 1; col < multiColRows[m].length; col++) {
-      colStarts.push(multiColRows[m][col].x)
+    if (!bestTrack) break
+
+    var tMinX = Infinity
+    var tMaxX2 = -Infinity
+    var rowMap = {}
+    for (var tk = 0; tk < bestTrack.members.length; tk++) {
+      var m = bestTrack.members[tk]
+      usedCell[m.idx] = true
+      rowMap[m.cell.rowIdx] = m.cell
+      if (m.cell.x < tMinX) tMinX = m.cell.x
+      if (m.cell.x2 > tMaxX2) tMaxX2 = m.cell.x2
+    }
+
+    tracks.push({
+      minX: tMinX,
+      maxX2: tMaxX2,
+      centerX: (tMinX + tMaxX2) * 0.5,
+      rowMap: rowMap
+    })
+  }
+
+  if (tracks.length < minCols) return false
+  tracks.sort(function(a, b) { return a.minX - b.minX })
+
+  // Evaluate contiguous slices of column tracks for a genuine table grid.
+  for (var a = 0; a < tracks.length; a++) {
+    for (var b = a + minCols - 1; b < tracks.length; b++) {
+      var sliceLen = b - a + 1
+      var validGutters = true
+      for (var p = a; p < b; p++) {
+        if (tracks[p + 1].minX < tracks[p].minX + 12) { validGutters = false; break }
+        if (tracks[p + 1].minX - tracks[p].maxX2 > maxColGutter) { validGutters = false; break }
+      }
+      if (!validGutters) break
+
+      var gridX1 = tracks[a].minX
+      var gridX2 = tracks[b].maxX2
+      var minTrackHits = sliceLen === 2 ? 2 : Math.max(3, Math.ceil(sliceLen * 0.7))
+
+      // Collect rows populated across this column slice with uniform cell height.
+      var matched = []
+      for (var ri = 0; ri < allRows.length; ri++) {
+        var rowCells = []
+        var minH = Infinity
+        var maxH = 0
+        for (var ti = a; ti <= b; ti++) {
+          var tc = tracks[ti].rowMap[ri]
+          if (tc) {
+            rowCells.push({ trackOffset: ti - a, cell: tc })
+            if (tc.h < minH) minH = tc.h
+            if (tc.h > maxH) maxH = tc.h
+          }
+        }
+        if (rowCells.length >= minTrackHits && minH > 0 && (maxH / minH) <= 1.75) {
+          matched.push({ rowIdx: ri, cy: allRows[ri].cy, cells: rowCells })
+        }
+      }
+
+      var minRowsNeeded = sliceLen === 2 ? 4 : 3
+      if (matched.length < minRowsNeeded) continue
+
+      // Split matched rows into contiguous vertical runs (no large vertical
+      // jumps and no interleaved prose / non-table rows inside [gridX1, gridX2]).
+      var runStart = 0
+      while (runStart < matched.length) {
+        var run = [matched[runStart]]
+        var wrappedGaps = 0
+
+        for (var nxt = runStart + 1; nxt < matched.length; nxt++) {
+          var prevM = run[run.length - 1]
+          var curM = matched[nxt]
+          var dy = curM.cy - prevM.cy
+          if (dy <= 0 || dy > maxRowStep) break
+
+          // Count intervening rows in allRows overlapping this table's X-band.
+          var intervening = 0
+          var hasProseIntervening = false
+          for (var mid = prevM.rowIdx + 1; mid < curM.rowIdx; mid++) {
+            var midRow = allRows[mid]
+            var overlapsGrid = !(midRow.maxX2 < gridX1 - 4 || midRow.minX > gridX2 + 4)
+            if (overlapsGrid) {
+              intervening++
+              if (midRow.maxWords >= 4) hasProseIntervening = true
+            }
+          }
+
+          if (intervening > 1 || hasProseIntervening) break
+          if (intervening === 1) {
+            if (sliceLen === 2) break
+            wrappedGaps++
+          }
+          run.push(curM)
+        }
+
+        if (run.length >= minRowsNeeded) {
+          var maxAllowedWrapped = Math.floor((run.length - 1) / 3)
+          if (wrappedGaps <= maxAllowedWrapped) {
+            // Check row-spacing regularity.
+            var minDy = Infinity
+            var maxDy = 0
+            for (var d = 1; d < run.length; d++) {
+              var step = run[d].cy - run[d - 1].cy
+              if (step < minDy) minDy = step
+              if (step > maxDy) maxDy = step
+            }
+            var spacingOk = maxDy <= Math.max(minDy * 2.2, minDy + medH * 1.4)
+
+            if (spacingOk) {
+              var trackHits = []
+              for (var z = 0; z < sliceLen; z++) trackHits.push(0)
+              var datumCount = 0
+              var col1Count = 0
+              var col1Numeric = 0
+              var totalWords = 0
+              var totalCells = 0
+
+              for (var rr = 0; rr < run.length; rr++) {
+                var rc = run[rr].cells
+                for (var cc = 0; cc < rc.length; cc++) {
+                  var off = rc[cc].trackOffset
+                  var cellObj = rc[cc].cell
+                  trackHits[off]++
+                  totalCells++
+                  totalWords += cellObj.wordCount
+                  if (cellObj.isDatum) datumCount++
+                  if (off === 1) {
+                    col1Count++
+                    if (cellObj.isNumeric) col1Numeric++
+                  }
+                }
+              }
+
+              var activeTracks = 0
+              for (var th = 0; th < trackHits.length; th++) {
+                if (trackHits[th] >= minRowsNeeded) activeTracks++
+              }
+              var avgWordsPerCell = totalCells > 0 ? totalWords / totalCells : 99
+
+              if (avgWordsPerCell <= 3.5 && activeTracks >= minCols) {
+                if (sliceLen >= 3 && (datumCount >= 2 || run.length >= 4)) {
+                  return true
+                }
+                if (sliceLen === 2 && hasSelection && col1Count >= 4 && col1Numeric >= Math.ceil(col1Count * 0.5)) {
+                  return true
+                }
+              }
+            }
+          }
+        }
+
+        runStart += Math.max(1, run.length)
+      }
     }
   }
-  var bestAligned = 0
-  for (var a = 0; a < colStarts.length; a++) {
-    var count = 0
-    for (var b = 0; b < colStarts.length; b++) {
-      if (Math.abs(colStarts[b] - colStarts[a]) <= alignTol) count++
-    }
-    if (count > bestAligned) bestAligned = count
-  }
 
-  var threeColRows = 0
-  for (var t = 0; t < multiColRows.length; t++) {
-    if (multiColRows[t].length >= 3) threeColRows++
-  }
-
-  return bestAligned >= 3 && (threeColRows >= 2 || numericCells >= 2 || multiColRows.length >= 4)
+  return false
 }
 
 // Analyzes active OCR words, decoded QR/barcodes, selection bounds, and window
@@ -486,7 +698,7 @@ function detectScreenContext(opts) {
   }
 
   // 3. Tabular data (aligned multi-column OCR word grid).
-  if (actions.length < 2 && detectTableLayout(activeWords)) {
+  if (actions.length < 2 && detectTableLayout(activeWords, { hasSelection: rects.length > 0 })) {
     actions.push({
       kind: "extract_table",
       icon: "󰓫",

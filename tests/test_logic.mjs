@@ -237,6 +237,72 @@ const tableWords = [
 assert.equal(sandbox.detectTableLayout(tableWords), true)
 assert.equal(sandbox.detectTableLayout(mapped), false)
 
+// Right-aligned numeric table embedded alongside a left sidebar must still trigger
+const embeddedTableWithSidebar = [
+  // Left sidebar nav (outside table X-band, staggered Y)
+  { text: "Home",    x: 20, y: 100, w: 48, h: 18 },
+  { text: "Markets", x: 20, y: 145, w: 68, h: 18 },
+  { text: "News",    x: 20, y: 190, w: 44, h: 18 },
+  { text: "Watch",   x: 20, y: 235, w: 52, h: 18 },
+  // 4-column right-aligned financial table in main pane
+  { text: "Ticker",  x: 280, y: 120, w: 55, h: 15 },
+  { text: "Price",   x: 455, y: 120, w: 45, h: 15 },
+  { text: "Chg",     x: 572, y: 120, w: 28, h: 15 },
+  { text: "AAPL",    x: 280, y: 150, w: 42, h: 15 },
+  { text: "$192.40", x: 438, y: 150, w: 62, h: 15 },
+  { text: "+1.2%",   x: 552, y: 150, w: 48, h: 15 },
+  { text: "MSFT",    x: 280, y: 180, w: 45, h: 15 },
+  { text: "$415.10", x: 438, y: 180, w: 62, h: 15 },
+  { text: "-0.4%",   x: 555, y: 180, w: 45, h: 15 },
+  { text: "NVDA",    x: 280, y: 210, w: 44, h: 15 },
+  { text: "$138.25", x: 438, y: 210, w: 62, h: 15 },
+  { text: "+3.8%",   x: 552, y: 210, w: 48, h: 15 }
+]
+assert.equal(sandbox.detectTableLayout(embeddedTableWithSidebar), true)
+
+// 2-column numeric metric table triggers only when user selects it, not full-screen
+const twoColMetrics = [
+  { text: "Plan",    x: 60, y: 40,  w: 40, h: 15 }, { text: "$29/mo", x: 220, y: 40,  w: 58, h: 15 },
+  { text: "Users",   x: 60, y: 68,  w: 45, h: 15 }, { text: "10",     x: 220, y: 68,  w: 22, h: 15 },
+  { text: "Storage", x: 60, y: 96,  w: 62, h: 15 }, { text: "100GB",  x: 220, y: 96,  w: 50, h: 15 },
+  { text: "Uptime",  x: 60, y: 124, w: 54, h: 15 }, { text: "99.9%",  x: 220, y: 124, w: 48, h: 15 }
+]
+assert.equal(sandbox.detectTableLayout(twoColMetrics, { hasSelection: false }), false)
+assert.equal(sandbox.detectTableLayout(twoColMetrics, { hasSelection: true }), true)
+
+// False-positive regression: X Chats 3-pane UI (left nav + DM list with preview lines + chat bubbles)
+const xChatsWords = [
+  // Left navigation rail
+  { text: "Home",          x: 60, y: 80,  w: 52, h: 18 },
+  { text: "Explore",       x: 60, y: 132, w: 66, h: 18 },
+  { text: "Notifications", x: 60, y: 184, w: 108, h: 18 },
+  { text: "Chat",          x: 60, y: 236, w: 42, h: 18 },
+  { text: "Bookmarks",     x: 60, y: 288, w: 92, h: 18 },
+  // Middle DM list: header row (Name + timestamp) interleaved with 1-col preview lines
+  { text: "Carlos", x: 280, y: 80,  w: 54, h: 15 }, { text: "2h",     x: 520, y: 80,  w: 20, h: 14 },
+  { text: "Hey", x: 280, y: 104, w: 28, h: 14 }, { text: "did", x: 314, y: 104, w: 24, h: 14 }, { text: "you", x: 344, y: 104, w: 26, h: 14 }, { text: "see", x: 376, y: 104, w: 26, h: 14 }, { text: "that", x: 408, y: 104, w: 30, h: 14 },
+  { text: "Maria",  x: 280, y: 148, w: 48, h: 15 }, { text: "5h",     x: 520, y: 148, w: 20, h: 14 },
+  { text: "Sounds", x: 280, y: 172, w: 50, h: 14 }, { text: "good", x: 336, y: 172, w: 36, h: 14 }, { text: "lets", x: 378, y: 172, w: 30, h: 14 }, { text: "meet", x: 414, y: 172, w: 36, h: 14 }, { text: "later", x: 456, y: 172, w: 34, h: 14 },
+  { text: "Alex",   x: 280, y: 216, w: 38, h: 15 }, { text: "1d",     x: 520, y: 216, w: 20, h: 14 },
+  { text: "Are", x: 280, y: 240, w: 26, h: 14 }, { text: "you", x: 312, y: 240, w: 26, h: 14 }, { text: "free", x: 344, y: 240, w: 30, h: 14 }, { text: "for", x: 380, y: 240, w: 22, h: 14 }, { text: "lunch", x: 408, y: 240, w: 40, h: 14 },
+  { text: "Jordan", x: 280, y: 284, w: 56, h: 15 }, { text: "Nov 24", x: 500, y: 284, w: 40, h: 14 },
+  { text: "Thanks", x: 280, y: 308, w: 48, h: 14 }, { text: "for", x: 334, y: 308, w: 22, h: 14 }, { text: "sending", x: 362, y: 308, w: 54, h: 14 }, { text: "that", x: 422, y: 308, w: 30, h: 14 },
+  // Right active chat thread: alternating bubbles
+  { text: "Yeah", x: 640, y: 100, w: 34, h: 15 }, { text: "I", x: 680, y: 100, w: 8, h: 15 }, { text: "saw", x: 694, y: 100, w: 28, h: 15 }, { text: "it", x: 728, y: 100, w: 12, h: 15 }, { text: "earlier", x: 746, y: 100, w: 48, h: 15 }, { text: "today", x: 800, y: 100, w: 40, h: 15 },
+  { text: "Awesome", x: 960, y: 156, w: 62, h: 15 }, { text: "see", x: 1028, y: 156, w: 26, h: 15 }, { text: "you", x: 1060, y: 156, w: 26, h: 15 }, { text: "at", x: 1092, y: 156, w: 16, h: 15 }, { text: "seven", x: 1114, y: 156, w: 42, h: 15 },
+  { text: "On", x: 640, y: 220, w: 22, h: 15 }, { text: "my", x: 668, y: 220, w: 22, h: 15 }, { text: "way", x: 696, y: 220, w: 30, h: 15 }, { text: "now", x: 732, y: 220, w: 30, h: 15 }
+]
+assert.equal(sandbox.detectTableLayout(xChatsWords), false, "X Chats 3-pane UI must not trigger Extract Table")
+
+// False-positive regression: 2-pane sidebar + prose article or settings list
+const sidebarAndProse = [
+  { text: "General",   x: 40, y: 80,  w: 62, h: 15 }, { text: "Choose", x: 260, y: 80,  w: 54, h: 15 }, { text: "your", x: 320, y: 80,  w: 34, h: 15 }, { text: "default", x: 360, y: 80,  w: 52, h: 15 },
+  { text: "Models",    x: 40, y: 112, w: 56, h: 15 }, { text: "Configure", x: 260, y: 112, w: 72, h: 15 }, { text: "API", x: 338, y: 112, w: 28, h: 15 }, { text: "keys", x: 372, y: 112, w: 36, h: 15 },
+  { text: "Tasks",     x: 40, y: 144, w: 44, h: 15 }, { text: "Route", x: 260, y: 144, w: 44, h: 15 }, { text: "specific", x: 310, y: 144, w: 58, h: 15 }, { text: "tasks", x: 374, y: 144, w: 42, h: 15 },
+  { text: "Shortcuts", x: 40, y: 176, w: 76, h: 15 }, { text: "Bind", x: 260, y: 176, w: 34, h: 15 }, { text: "global", x: 300, y: 176, w: 46, h: 15 }, { text: "hotkeys", x: 352, y: 176, w: 58, h: 15 }
+]
+assert.equal(sandbox.detectTableLayout(sidebarAndProse), false, "2-pane sidebar + descriptions must not trigger Extract Table")
+
 // Context priority: QR URL in selection surfaces Open QR Link + Copy QR
 const mappedCodes = plain(sandbox.mapCodesToOverlay(
   [{ type: "QR-Code", data: "https://github.com/cgranier/screenlens", isUrl: true, x: 200, y: 200, w: 200, h: 200 }],
