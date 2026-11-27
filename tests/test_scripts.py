@@ -281,6 +281,49 @@ class ScreenLensTests(unittest.TestCase):
         self.assertEqual(oc_cmd.count("-f"), 2)
         self.assertIn("/tmp/r2.png", oc_cmd)
 
+    def test_qr_barcode_decoding_and_url_scheme_validation(self):
+        # URL scheme guards (ocr.py and actions.py)
+        self.assertTrue(ocr_mod.is_safe_web_url("https://github.com/cgranier/screenlens"))
+        self.assertTrue(ocr_mod.is_safe_web_url("http://example.org/test?x=1"))
+        for bad in [
+            "javascript:alert(1)",
+            "file:///etc/passwd",
+            "data:text/html,hi",
+            "ftp://example.com/a",
+            "https://bad url.com",
+            "not-a-url",
+        ]:
+            self.assertFalse(ocr_mod.is_safe_web_url(bad), f"Should reject {bad}")
+            with self.assertRaises(ValueError):
+                actions_mod.validate_web_url(bad)
+
+        # Polygon output parser handles colons inside URLs
+        parsed = ocr_mod.parse_zbar_polygon_output(
+            "QR-Code:+20,+30 +20,+190 +180,+190 +180,+30:https://github.com/cgranier/screenlens\n"
+            "QR-Code:+10,+10 +10,+50 +50,+50 +50,+10:WIFI:T:WPA;S:Home;P:pass;;\n"
+        )
+        self.assertEqual(len(parsed), 2)
+        self.assertTrue(parsed[0]["isUrl"])
+        self.assertEqual(parsed[0]["data"], "https://github.com/cgranier/screenlens")
+        self.assertEqual((parsed[0]["x"], parsed[0]["y"], parsed[0]["w"], parsed[0]["h"]), (20, 30, 160, 160))
+        self.assertFalse(parsed[1]["isUrl"])
+        self.assertIn("WIFI:", parsed[1]["data"])
+
+        # Real end-to-end QR generation + decoding via ocr.py when qrencode & zbarimg exist
+        import shutil
+        if shutil.which("qrencode") and shutil.which("zbarimg"):
+            with tempfile.TemporaryDirectory() as tmp:
+                qr_png = os.path.join(tmp, "qr.png")
+                subprocess.run(
+                    ["qrencode", "-s", "6", "-o", qr_png, "https://github.com/cgranier/screenlens"],
+                    check=True,
+                    capture_output=True,
+                )
+                codes = ocr_mod.scan_barcodes(qr_png)
+                self.assertEqual(len(codes), 1)
+                self.assertTrue(codes[0]["isUrl"])
+                self.assertEqual(codes[0]["data"], "https://github.com/cgranier/screenlens")
+
     def test_voice_payload_extraction(self):
         sample = {"lastDictation": {"timestamp": "2026-11-25T20:00:00Z", "text": "Explain this chart"}}
         self.assertEqual(voice_mod.extract_text(sample), "Explain this chart")

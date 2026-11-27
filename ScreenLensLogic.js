@@ -213,6 +213,291 @@ function mapWordsToOverlay(words, imageWidth, imageHeight, overlayWidth, overlay
   return out
 }
 
+// Validates that a string is a safe http:// or https:// web URL (rejects
+// javascript:, file:, data:, mailto:, whitespace, or control chars).
+function isSafeHttpUrl(raw) {
+  var s = String(raw || "").trim()
+  if (!s || s.length > 2048) return false
+  if (/[\s\x00-\x1f\x7f]/.test(s)) return false
+  var m = s.match(/^(https?):\/\/([^\/?#]+)(?:[\/?#].*)?$/i)
+  if (!m) return false
+  var host = m[2]
+  return host.length > 0 && host.indexOf(".") !== -1
+}
+
+// Converts decoded QR/barcode bounding boxes from image pixel space into
+// logical overlay coordinates.
+function mapCodesToOverlay(codes, imageWidth, imageHeight, overlayWidth, overlayHeight) {
+  if (!Array.isArray(codes) || codes.length === 0) return []
+  if (!(imageWidth > 0) || !(imageHeight > 0) || !(overlayWidth > 0) || !(overlayHeight > 0)) return []
+
+  var sx = overlayWidth / imageWidth
+  var sy = overlayHeight / imageHeight
+  var out = []
+
+  for (var i = 0; i < codes.length; i++) {
+    var c = codes[i]
+    if (!c || typeof c.data !== "string" || !c.data.trim().length) continue
+    var data = c.data.trim()
+    out.push({
+      type: String(c.type || "QR-Code"),
+      data: data,
+      isUrl: !!(c.isUrl && isSafeHttpUrl(data)),
+      x: (Number(c.x) || 0) * sx,
+      y: (Number(c.y) || 0) * sy,
+      w: Math.max(2, (Number(c.w) || 0) * sx),
+      h: Math.max(2, (Number(c.h) || 0) * sy)
+    })
+  }
+  return out
+}
+
+function _rectContainsCenter(rect, item, pad) {
+  if (!rect || !item) return false
+  var p = typeof pad === "number" ? pad : 4
+  var cx = item.x + item.w * 0.5
+  var cy = item.y + item.h * 0.5
+  return cx >= rect.x - p && cx <= rect.x + rect.w + p && cy >= rect.y - p && cy <= rect.y + rect.h + p
+}
+
+function _rectOverlaps(a, b) {
+  if (!a || !b) return false
+  return !(a.x + a.w < b.x || a.x > b.x + b.w || a.y + a.h < b.y || a.y > b.y + b.h)
+}
+
+// Detects error banners, stack traces, compiler/runtime failures, and HTTP 4xx/5xx diagnostics.
+function detectErrorSignal(text, windowClass) {
+  var src = String(text || "")
+  if (src.trim().length < 6) return false
+
+  var score = 0
+  var strong = [
+    /Traceback\s*\(most recent call last\)/i,
+    /\b(?:TypeError|ReferenceError|SyntaxError|ValueError|KeyError|AttributeError|IndexError|RuntimeError|NameError|ImportError|ModuleNotFoundError|AssertionError|NullPointerException|Segfault|Segmentation fault)\b/,
+    /\b(?:SIGSEGV|SIGABRT|SIGBUS|SIGKILL|ENOENT|EACCES|ECONNREFUSED)\b/,
+    /\bpanic:\s/i,
+    /\bFATAL\b/,
+    /\bUnhandledPromiseRejection\b/,
+    /\b(?:exit(?:ed)?(?:\s+with)?\s+code|status)\s+[1-9]\d*\b/i,
+    /\berror\[E\d+\]/i,
+    /\bHTTP\s+[45]\d{2}\b/i,
+    /\bPermission denied\b/i,
+    /\bCannot (?:find module|read propert|assign)\b/i,
+    /\bundefined reference to\b/i,
+    /\bat\s+\S+\.(?:js|ts|tsx|jsx|py|rs|go|java|cpp|c|h|qml):\d+/i
+  ]
+  for (var i = 0; i < strong.length; i++) {
+    if (strong[i].test(src)) score += 2
+    if (score >= 2) return true
+  }
+
+  var medium = [
+    /\berror:\s+\S/i,
+    /\bexception\b/i,
+    /\bstack\s*trace\b/i,
+    /\bfailed\b/i,
+    /\bwarning:\s+\S/i
+  ]
+  for (var j = 0; j < medium.length; j++) {
+    if (medium[j].test(src)) score += 1
+  }
+
+  if (score >= 1) {
+    var win = String(windowClass || "").toLowerCase()
+    if (/ghostty|alacritty|kitty|foot|wezterm|konsole|xterm|code|cursor|zed|nvim|vim|jetbrains|idea|pycharm/.test(win)) {
+      score += 1
+    }
+  }
+  return score >= 2
+}
+
+// Detects tabular layouts from OCR word bounding boxes by clustering visual
+// rows, splitting columns on horizontal gutters, and checking column alignment.
+function detectTableLayout(words) {
+  if (!Array.isArray(words) || words.length < 6) return false
+
+  var valid = []
+  var totalH = 0
+  for (var i = 0; i < words.length; i++) {
+    var w = words[i]
+    if (!w || !w.text || !(w.h > 0) || !(w.w > 0)) continue
+    valid.push(w)
+    totalH += w.h
+  }
+  if (valid.length < 6) return false
+
+  var avgH = Math.max(8, totalH / valid.length)
+  var rowTol = Math.max(8, avgH * 0.65)
+  var colGap = Math.max(18, avgH * 1.45)
+
+  // Sort top-to-bottom, then left-to-right.
+  valid.sort(function(a, b) {
+    var ay = a.y + a.h * 0.5
+    var by = b.y + b.h * 0.5
+    if (Math.abs(ay - by) > rowTol) return ay - by
+    return a.x - b.x
+  })
+
+  // Cluster into visual rows.
+  var rows = []
+  for (var j = 0; j < valid.length; j++) {
+    var word = valid[j]
+    var cy = word.y + word.h * 0.5
+    var row = rows.length > 0 ? rows[rows.length - 1] : null
+    if (!row || Math.abs(cy - row.cy) > rowTol) {
+      rows.push({ cy: cy, words: [word] })
+    } else {
+      row.words.push(word)
+    }
+  }
+  if (rows.length < 3) return false
+
+  // Split each row into separated column cells.
+  var multiColRows = []
+  var numericCells = 0
+  for (var r = 0; r < rows.length; r++) {
+    var rw = rows[r].words
+    rw.sort(function(a, b) { return a.x - b.x })
+    var cells = [{ x: rw[0].x, x2: rw[0].x + rw[0].w, text: rw[0].text }]
+    for (var k = 1; k < rw.length; k++) {
+      var prev = cells[cells.length - 1]
+      var cur = rw[k]
+      if (cur.x - prev.x2 >= colGap) {
+        cells.push({ x: cur.x, x2: cur.x + cur.w, text: cur.text })
+      } else {
+        prev.x2 = Math.max(prev.x2, cur.x + cur.w)
+        prev.text += " " + cur.text
+      }
+    }
+    if (cells.length >= 2) {
+      multiColRows.push(cells)
+      for (var c = 0; c < cells.length; c++) {
+        if (/^[\$€£+\-]?\d[\d,.:%\/-]*$/.test(cells[c].text.trim())) {
+          numericCells++
+        }
+      }
+    }
+  }
+  if (multiColRows.length < 3) return false
+
+  // Verify vertical column alignment across >= 3 rows on column 2+ X-starts.
+  var alignTol = Math.max(24, avgH * 2.2)
+  var colStarts = []
+  for (var m = 0; m < multiColRows.length; m++) {
+    for (var col = 1; col < multiColRows[m].length; col++) {
+      colStarts.push(multiColRows[m][col].x)
+    }
+  }
+  var bestAligned = 0
+  for (var a = 0; a < colStarts.length; a++) {
+    var count = 0
+    for (var b = 0; b < colStarts.length; b++) {
+      if (Math.abs(colStarts[b] - colStarts[a]) <= alignTol) count++
+    }
+    if (count > bestAligned) bestAligned = count
+  }
+
+  var threeColRows = 0
+  for (var t = 0; t < multiColRows.length; t++) {
+    if (multiColRows[t].length >= 3) threeColRows++
+  }
+
+  return bestAligned >= 3 && (threeColRows >= 2 || numericCells >= 2 || multiColRows.length >= 4)
+}
+
+// Analyzes active OCR words, decoded QR/barcodes, selection bounds, and window
+// metadata locally (0 ms) and returns up to 2 prioritized smart quick actions.
+function detectScreenContext(opts) {
+  var o = opts || ({})
+  var words = Array.isArray(o.words) ? o.words : []
+  var codes = Array.isArray(o.codes) ? o.codes : []
+  var rects = Array.isArray(o.selectionRects) && o.selectionRects.length > 0
+    ? o.selectionRects
+    : (o.selectionRect ? [o.selectionRect] : [])
+  var selectedText = String(o.selectedText || "").trim()
+
+  var activeWords = words
+  var activeCodes = codes
+
+  if (rects.length > 0) {
+    activeWords = []
+    for (var i = 0; i < words.length; i++) {
+      for (var r = 0; r < rects.length; r++) {
+        if (_rectContainsCenter(rects[r], words[i], 4)) {
+          activeWords.push(words[i])
+          break
+        }
+      }
+    }
+    activeCodes = []
+    for (var j = 0; j < codes.length; j++) {
+      for (var cr = 0; cr < rects.length; cr++) {
+        if (_rectOverlaps(rects[cr], codes[j])) {
+          activeCodes.push(codes[j])
+          break
+        }
+      }
+    }
+  }
+
+  var activeText = selectedText
+  if (!activeText && activeWords.length > 0) {
+    var parts = []
+    for (var w = 0; w < activeWords.length; w++) parts.push(activeWords[w].text)
+    activeText = parts.join(" ")
+  }
+
+  var actions = []
+
+  // 1. Highest-precision signal: QR code / barcode detected.
+  if (activeCodes.length > 0) {
+    var primaryCode = activeCodes[0]
+    if (primaryCode.isUrl && isSafeHttpUrl(primaryCode.data)) {
+      actions.push({
+        kind: "qr_open",
+        icon: "󰐲",
+        labelKey: "chip.openQrUrl",
+        payload: primaryCode.data
+      })
+      actions.push({
+        kind: "qr_copy",
+        icon: "󰆏",
+        labelKey: "chip.copyQr",
+        payload: primaryCode.data
+      })
+      return actions
+    }
+    actions.push({
+      kind: "qr_copy",
+      icon: "󰐲",
+      labelKey: "chip.copyQr",
+      payload: primaryCode.data
+    })
+  }
+
+  // 2. Stack traces, compiler errors, HTTP errors, crash diagnostics.
+  if (detectErrorSignal(activeText, o.windowClass)) {
+    actions.push({
+      kind: "diagnose",
+      icon: "󰃤",
+      labelKey: "chip.diagnose",
+      payload: ""
+    })
+  }
+
+  // 3. Tabular data (aligned multi-column OCR word grid).
+  if (actions.length < 2 && detectTableLayout(activeWords)) {
+    actions.push({
+      kind: "extract_table",
+      icon: "󰓫",
+      labelKey: "chip.extractTable",
+      payload: ""
+    })
+  }
+
+  return actions.slice(0, 2)
+}
+
 // Finds the word directly under (px, py), or the closest word within maxDist.
 function hitTestWord(words, px, py, maxDist) {
   if (!Array.isArray(words) || words.length === 0) return -1

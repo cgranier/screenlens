@@ -56,10 +56,28 @@ Item {
   property bool lassoPinMode: false
   property bool shiftKeyHeld: false
 
-  // OCR state
+  // OCR & local context state
   property bool ocrLoading: false
   property var rawOcrWords: []
   property var ocrWords: [] // Mapped to logical overlay coordinates
+  property var rawOcrCodes: []
+  property var ocrCodes: [] // Decoded QR/barcodes mapped to overlay coordinates
+  readonly property var contextActions: Logic.detectScreenContext({
+    words: root.ocrWords,
+    codes: root.ocrCodes,
+    selectionRects: root.selectionRects,
+    selectedText: root.selectedText,
+    windowClass: root.windowClass,
+    windowTitle: root.windowTitle
+  })
+  readonly property var activeQrAction: {
+    if (!root.selectionRect || !Array.isArray(root.contextActions)) return null
+    for (var i = 0; i < root.contextActions.length; i++) {
+      var act = root.contextActions[i]
+      if (act && (act.kind === "qr_open" || act.kind === "qr_copy")) return act
+    }
+    return null
+  }
   property int textDragStartIdx: -1
   property var textDragStartPoint: null
   property var selectedWordIndices: []
@@ -191,6 +209,8 @@ Item {
     root.ocrLoading = false
     root.rawOcrWords = []
     root.ocrWords = []
+    root.rawOcrCodes = []
+    root.ocrCodes = []
     root.textDragStartIdx = -1
     root.textDragStartPoint = null
     root.selectedWordIndices = []
@@ -309,6 +329,13 @@ Item {
   function remapOcrWords() {
     root.ocrWords = Logic.mapWordsToOverlay(
       root.rawOcrWords,
+      root.imageWidth,
+      root.imageHeight,
+      panel.width,
+      panel.height
+    )
+    root.ocrCodes = Logic.mapCodesToOverlay(
+      root.rawOcrCodes,
       root.imageWidth,
       root.imageHeight,
       panel.width,
@@ -448,6 +475,36 @@ Item {
       )
     } else if (kind === "extract") {
       root.extractAndCopyText()
+    }
+  }
+
+  function openSafeQrUrl(url) {
+    var clean = String(url || "").trim()
+    if (!Logic.isSafeHttpUrl(clean)) {
+      root.showToast(strings.t("status.invalidUrl"))
+      return
+    }
+    Quickshell.execDetached(["/usr/bin/python3", root.pluginDir + "/scripts/actions.py", "open-url", clean])
+    root.showToast(strings.t("status.openedUrl"))
+    root.dismiss()
+  }
+
+  function runContextAction(action) {
+    if (!action || !action.kind) return
+    if (action.kind === "qr_open") {
+      root.openSafeQrUrl(action.payload)
+    } else if (action.kind === "qr_copy") {
+      root.copyText(action.payload)
+    } else if (action.kind === "diagnose") {
+      root.submitPrompt(
+        "Diagnose the error, stack trace, or failure shown here. Briefly explain the root cause and give the exact fix or command.",
+        root.inferTask("")
+      )
+    } else if (action.kind === "extract_table") {
+      root.submitPrompt(
+        "Extract the table shown here accurately. Present a concise Markdown table first, followed by a fenced ```csv code block with the exact same rows so it can be copied directly.",
+        root.inferTask("")
+      )
     }
   }
 
@@ -759,6 +816,7 @@ Item {
         try { res = JSON.parse(text) } catch (e) { res = null }
         if (res && res.ok && Array.isArray(res.words)) {
           root.rawOcrWords = res.words
+          root.rawOcrCodes = Array.isArray(res.codes) ? res.codes : []
           root.remapOcrWords()
         }
       }
@@ -878,8 +936,8 @@ Item {
     shown: root.opened
     WlrLayershell.namespace: "screenlens"
 
-    onWidthChanged: if (root.rawOcrWords.length > 0) root.remapOcrWords()
-    onHeightChanged: if (root.rawOcrWords.length > 0) root.remapOcrWords()
+    onWidthChanged: if (root.rawOcrWords.length > 0 || root.rawOcrCodes.length > 0) root.remapOcrWords()
+    onHeightChanged: if (root.rawOcrWords.length > 0 || root.rawOcrCodes.length > 0) root.remapOcrWords()
 
     // Canvas gesture MouseArea (handles lasso drawing, OCR text drag, and
     // interactive crop move/resize handles cleanly without MouseArea conflicts).
@@ -1232,6 +1290,15 @@ Item {
         id: selectionRow
         anchors.centerIn: parent
         spacing: Style.spacing.xs
+
+        Ui.Button {
+          foreground: root.fgColor
+          visible: !!root.activeQrAction
+          text: root.activeQrAction ? strings.t(root.activeQrAction.labelKey) : ""
+          iconText: root.activeQrAction ? root.activeQrAction.icon : "󰐲"
+          selected: true
+          onClicked: if (root.activeQrAction) root.runContextAction(root.activeQrAction)
+        }
 
         Ui.Button {
           foreground: root.fgColor
@@ -1896,10 +1963,82 @@ Item {
         }
       }
 
-      // Quick-action chips row with subtle keycap badges
+      // Quick-action chips row (contextual smart chips + standard chips)
       Row {
         anchors.horizontalCenter: parent.horizontalCenter
         spacing: Style.spacing.xs
+
+        Repeater {
+          model: root.contextActions
+          delegate: Rectangle {
+            id: smartChipRect
+            required property var modelData
+            required property int index
+            radius: Math.min(4, root.cornerRadius)
+            color: smartChipHover.hovered
+              ? Qt.lighter(root.accentColor, 1.08)
+              : root.accentColor
+            border.width: 1
+            border.color: smartChipHover.hovered
+              ? Util.alpha(root.onAccentInk, 0.35)
+              : Util.alpha(root.onAccentInk, 0.18)
+            implicitWidth: smartChipRow.implicitWidth + Style.space(18)
+            implicitHeight: Style.space(28)
+
+            SLUi.FloatingShadow { anchors.fill: parent; radius: smartChipRect.radius }
+
+            Row {
+              id: smartChipRow
+              anchors.centerIn: parent
+              spacing: Style.space(6)
+
+              PlainText {
+                anchors.verticalCenter: parent.verticalCenter
+                text: modelData.icon
+                color: root.onAccentInk
+                font.family: root.uiFont
+                font.pixelSize: Style.font.body
+              }
+
+              PlainText {
+                anchors.verticalCenter: parent.verticalCenter
+                text: strings.t(modelData.labelKey)
+                color: root.onAccentInk
+                font.family: root.uiFont
+                font.pixelSize: Style.font.bodySmall
+                font.bold: true
+              }
+
+              SLUi.KeyCap {
+                anchors.verticalCenter: parent.verticalCenter
+                label: "Alt+" + (index + 5)
+                fgColor: root.onAccentInk
+                cornerRadius: root.cornerRadius
+                uiFont: root.uiFont
+              }
+            }
+
+            HoverHandler { id: smartChipHover; cursorShape: Qt.PointingHandCursor }
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.runContextAction(modelData)
+            }
+
+            Ui.PanelToolTip {
+              visible: smartChipHover.hovered && !!modelData.payload
+              text: String(modelData.payload || "").slice(0, 120)
+            }
+          }
+        }
+
+        Rectangle {
+          visible: root.contextActions.length > 0
+          anchors.verticalCenter: parent.verticalCenter
+          width: 1
+          height: Style.space(18)
+          color: root.hairlineColor
+        }
 
         Repeater {
           model: [
@@ -2239,6 +2378,8 @@ Item {
                   else if (event.key === Qt.Key_2) { root.runQuickChip("summarize"); event.accepted = true }
                   else if (event.key === Qt.Key_3) { root.runQuickChip("translate"); event.accepted = true }
                   else if (event.key === Qt.Key_4) { root.runQuickChip("extract"); event.accepted = true }
+                  else if (event.key === Qt.Key_5 && root.contextActions.length > 0) { root.runContextAction(root.contextActions[0]); event.accepted = true }
+                  else if (event.key === Qt.Key_6 && root.contextActions.length > 1) { root.runContextAction(root.contextActions[1]); event.accepted = true }
                 }
               }
 

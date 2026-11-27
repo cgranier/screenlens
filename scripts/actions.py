@@ -9,6 +9,34 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
+
+
+def validate_web_url(url: str) -> str:
+    raw = str(url or "").strip()
+    if not raw or len(raw) > 2048:
+        raise ValueError("URL is empty or too long")
+    if any(ch.isspace() or ord(ch) < 32 for ch in raw):
+        raise ValueError("URL contains invalid whitespace or control characters")
+    parsed = urllib.parse.urlparse(raw)
+    if parsed.scheme.lower() not in ("http", "https") or not parsed.netloc:
+        raise ValueError("Only http:// and https:// URLs are allowed")
+    return raw
+
+
+def open_safe_url(url: str) -> int:
+    clean = validate_web_url(url)
+    opener = shutil.which("xdg-open")
+    if not opener:
+        raise RuntimeError("xdg-open is not installed")
+    subprocess.Popen(
+        [opener, clean],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return 0
 
 
 def read_payload(path: str, b64_value: str = "") -> dict:
@@ -290,6 +318,9 @@ def main() -> int:
     p_img.add_argument("image")
     p_img.add_argument("--crop", default="")
 
+    p_url = sub.add_parser("open-url")
+    p_url.add_argument("url")
+
     p_prep = sub.add_parser("prepare-handoff")
     p_prep.add_argument("file", nargs="?", default="-")
     p_prep.add_argument("--b64", default="")
@@ -312,6 +343,12 @@ def main() -> int:
         return copy_text_from_file(args.file)
     if args.cmd == "copy-image":
         return copy_image(args.image, args.crop)
+    if args.cmd == "open-url":
+        try:
+            return open_safe_url(args.url)
+        except Exception as exc:
+            notify_error(f"Could not open URL: {exc}")
+            return 1
     if args.cmd == "prepare-handoff":
         print(json.dumps(prepare_handoff(args.file, b64_value=args.b64)), flush=True)
         return 0

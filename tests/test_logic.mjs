@@ -198,4 +198,79 @@ assert.equal(streamingParsed[1].kind, "code")
 assert.equal(streamingParsed[1].lang, "bash")
 assert.equal(streamingParsed[1].text, "echo 1")
 
+// 9. Context-aware quick actions: URL validation, error diagnostics, tables, QR codes
+assert.equal(sandbox.isSafeHttpUrl("https://github.com/cgranier/screenlens"), true)
+assert.equal(sandbox.isSafeHttpUrl("http://example.com/path?a=1"), true)
+assert.equal(sandbox.isSafeHttpUrl("javascript:alert(1)"), false)
+assert.equal(sandbox.isSafeHttpUrl("file:///etc/passwd"), false)
+assert.equal(sandbox.isSafeHttpUrl("data:text/html,<b>hi</b>"), false)
+assert.equal(sandbox.isSafeHttpUrl("https://example.com/bad space"), false)
+
+// Error / stack trace detection
+assert.equal(sandbox.detectErrorSignal("Traceback (most recent call last):\nTypeError: x is undefined", "ghostty"), true)
+assert.equal(sandbox.detectErrorSignal("HTTP 502 Bad Gateway", "chromium"), true)
+assert.equal(sandbox.detectErrorSignal("error: cannot find crate foo", "ghostty"), true)
+assert.equal(sandbox.detectErrorSignal("Good morning, here is today's forecast.", "chromium"), false)
+
+// Tabular layout detection from aligned multi-column OCR word boxes
+const tableWords = [
+  { text: "Player", x: 40, y: 40, w: 60, h: 16 },
+  { text: "Team",   x: 200, y: 40, w: 45, h: 16 },
+  { text: "Pts",    x: 340, y: 40, w: 30, h: 16 },
+  { text: "Allen",  x: 40, y: 70, w: 50, h: 16 },
+  { text: "BUF",    x: 202, y: 70, w: 35, h: 16 },
+  { text: "28.4",   x: 342, y: 70, w: 35, h: 16 },
+  { text: "Jackson",x: 40, y: 100, w: 70, h: 16 },
+  { text: "BAL",    x: 199, y: 100, w: 35, h: 16 },
+  { text: "26.1",   x: 339, y: 100, w: 35, h: 16 }
+]
+assert.equal(sandbox.detectTableLayout(tableWords), true)
+assert.equal(sandbox.detectTableLayout(mapped), false)
+
+// Context priority: QR URL in selection surfaces Open QR Link + Copy QR
+const mappedCodes = plain(sandbox.mapCodesToOverlay(
+  [{ type: "QR-Code", data: "https://github.com/cgranier/screenlens", isUrl: true, x: 200, y: 200, w: 200, h: 200 }],
+  2000, 1000, 1000, 500
+))
+const qrActions = plain(sandbox.detectScreenContext({
+  words: tableWords,
+  codes: mappedCodes,
+  selectionRects: [{ x: 90, y: 90, w: 120, h: 120 }],
+  selectedText: "",
+  windowClass: "chromium"
+}))
+assert.equal(qrActions.length, 2)
+assert.equal(qrActions[0].kind, "qr_open")
+assert.equal(qrActions[1].kind, "qr_copy")
+
+// Unsafe QR scheme only offers Copy QR (never Open QR Link)
+const unsafeQrActions = plain(sandbox.detectScreenContext({
+  words: [],
+  codes: [{ type: "QR-Code", data: "javascript:alert(1)", isUrl: false, x: 100, y: 100, w: 80, h: 80 }],
+  selectionRects: [],
+  selectedText: "",
+  windowClass: "chromium"
+}))
+assert.equal(unsafeQrActions.length, 1)
+assert.equal(unsafeQrActions[0].kind, "qr_copy")
+
+// Table + error detection via detectScreenContext
+const tableActions = plain(sandbox.detectScreenContext({
+  words: tableWords,
+  codes: [],
+  selectionRects: [],
+  selectedText: "",
+  windowClass: "chromium"
+}))
+assert.equal(tableActions.some(a => a.kind === "extract_table"), true)
+
+const errActions = plain(sandbox.detectScreenContext({
+  words: [],
+  codes: [],
+  selectionRects: [],
+  selectedText: "SyntaxError: unexpected token at app.js:42",
+  windowClass: "ghostty"
+}))
+assert.equal(errActions[0].kind, "diagnose")
+
 console.log("test_logic.mjs: ALL PASSED")
