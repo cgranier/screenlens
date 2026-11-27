@@ -170,7 +170,13 @@ def compose_user_text(prompt: str, selected_text: str, window_info: dict | None,
     return "\n\n".join(parts)
 
 
-def build_gemini_payload(user_text: str, image_b64: str, mime: str, history: list[dict]) -> dict:
+def build_gemini_payload(
+    user_text: str,
+    image_b64: str,
+    mime: str,
+    history: list[dict],
+    web_search: bool = False,
+) -> dict:
     contents = []
     for idx, turn in enumerate(history[-MAX_HISTORY_TURNS:]):
         role = "model" if turn.get("role") == "assistant" else "user"
@@ -187,11 +193,14 @@ def build_gemini_payload(user_text: str, image_b64: str, mime: str, history: lis
         current_parts.insert(0, {"inline_data": {"mime_type": mime, "data": image_b64}})
     contents.append({"role": "user", "parts": current_parts})
 
-    return {
+    payload: dict = {
         "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
         "contents": contents,
         "generationConfig": {"temperature": 0.3, "maxOutputTokens": 2048},
     }
+    if web_search:
+        payload["tools"] = [{"google_search": {}}]
+    return payload
 
 
 def parse_gemini_sse_line(line: str) -> str:
@@ -211,7 +220,14 @@ def parse_gemini_sse_line(line: str) -> str:
     return "".join(chunks)
 
 
-def build_anthropic_payload(model: str, user_text: str, image_b64: str, mime: str, history: list[dict]) -> dict:
+def build_anthropic_payload(
+    model: str,
+    user_text: str,
+    image_b64: str,
+    mime: str,
+    history: list[dict],
+    web_search: bool = False,
+) -> dict:
     messages = []
     for idx, turn in enumerate(history[-MAX_HISTORY_TURNS:]):
         role = "assistant" if turn.get("role") == "assistant" else "user"
@@ -244,13 +260,16 @@ def build_anthropic_payload(model: str, user_text: str, image_b64: str, mime: st
     else:
         messages.append({"role": "user", "content": user_text})
 
-    return {
+    payload: dict = {
         "model": model,
         "max_tokens": 2048,
         "stream": True,
         "system": SYSTEM_PROMPT,
         "messages": messages,
     }
+    if web_search:
+        payload["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}]
+    return payload
 
 
 def parse_anthropic_sse_line(line: str) -> str:
@@ -321,6 +340,74 @@ def parse_openai_sse_line(line: str) -> str:
     return "".join(chunks)
 
 
+def build_openai_responses_payload(
+    model: str,
+    user_text: str,
+    image_b64: str,
+    mime: str,
+    history: list[dict],
+    web_search: bool = True,
+) -> dict:
+    items: list[dict] = []
+    user_seen = False
+    for turn in history[-MAX_HISTORY_TURNS:]:
+        role = "assistant" if turn.get("role") == "assistant" else "user"
+        text = str(turn.get("text") or "").strip()
+        if not text:
+            continue
+        if not user_seen and role == "user" and image_b64:
+            user_seen = True
+            items.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": text},
+                        {"type": "input_image", "image_url": f"data:{mime};base64,{image_b64}"},
+                    ],
+                }
+            )
+        else:
+            content_type = "output_text" if role == "assistant" else "input_text"
+            items.append({"role": role, "content": [{"type": content_type, "text": text}]})
+
+    if not user_seen and image_b64:
+        items.append(
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": user_text},
+                    {"type": "input_image", "image_url": f"data:{mime};base64,{image_b64}"},
+                ],
+            }
+        )
+    else:
+        items.append({"role": "user", "content": [{"type": "input_text", "text": user_text}]})
+
+    payload: dict = {
+        "model": model,
+        "instructions": SYSTEM_PROMPT,
+        "input": items,
+        "stream": True,
+        "max_output_tokens": 2048,
+    }
+    if web_search:
+        payload["tools"] = [{"type": "web_search_preview"}]
+    return payload
+
+
+def parse_openai_responses_sse_line(line: str) -> str:
+    if not line.startswith("data:"):
+        return ""
+    raw = line[5:].strip()
+    if not raw or raw == "[DONE]":
+        return ""
+    obj = json.loads(raw)
+    if obj.get("type") == "response.output_text.delta":
+        delta = obj.get("delta")
+        return delta if isinstance(delta, str) else ""
+    return ""
+
+
 def build_ollama_payload(model: str, user_text: str, image_b64: str, history: list[dict]) -> dict:
     messages: list[dict] = [{"role": "system", "content": SYSTEM_PROMPT}]
     user_seen = False
@@ -386,9 +473,11 @@ def build_agent_cli_command(
     full_prompt: str,
     model: str = "",
     image_path: str = "",
+    web_search: bool = False,
 ) -> list[str] | None:
     clean_model = "" if (not model or model == "default") else model.strip()
     if agent == "claude":
+        tools_spec = "Read,WebSearch,WebFetch" if web_search else "Read"
         return [
             "claude",
             "-p",
@@ -402,11 +491,11 @@ def build_agent_cli_command(
             "--setting-sources",
             "",
             "--tools",
-            "Read",
+            tools_spec,
             "--add-dir",
             "/tmp",
             "--allowedTools",
-            "Read",
+            tools_spec,
             "--output-format",
             "stream-json",
             "--verbose",
@@ -461,6 +550,7 @@ def build_agent_cli_command(
         cmd.extend(["-p", full_prompt])
         return cmd
     if agent == "grok":
+        tools_spec = "Read,WebSearch,WebFetch" if web_search else "Read"
         cmd = [
             "grok",
             "--add-dir",
@@ -468,14 +558,19 @@ def build_agent_cli_command(
             "--no-memory",
             "--no-plan",
             "--no-subagents",
-            "--disable-web-search",
-            "--tools",
-            "Read",
-            "--allow",
-            "Read",
-            "--output-format",
-            "plain",
         ]
+        if not web_search:
+            cmd.append("--disable-web-search")
+        cmd.extend(
+            [
+                "--tools",
+                tools_spec,
+                "--allow",
+                tools_spec,
+                "--output-format",
+                "plain",
+            ]
+        )
         if clean_model:
             cmd.extend(["-m", clean_model])
         cmd.extend(["-p", full_prompt])
@@ -595,7 +690,14 @@ def parse_opencode_jsonl_line(line: str) -> tuple[str, str, str]:
     return "", "", ""
 
 
-def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict], model: str = "", cli: str = "default") -> None:
+def run_agent_fallback(
+    user_text: str,
+    saved_image_path: str,
+    history: list[dict],
+    model: str = "",
+    cli: str = "default",
+    web_search: bool = False,
+) -> None:
     agent = cli if (cli and cli != "default") else detect_default_agent()
     if not agent:
         emit(
@@ -616,6 +718,8 @@ def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict
             lines.append("Inspect the attached screenshot image to answer the user's question.")
         else:
             lines.append(f"Inspect the screenshot image file at {saved_image_path} using your file-reading tool.")
+    if web_search:
+        lines.append("Live web search is enabled: use your web search tool to verify current or real-time facts when helpful.")
     for turn in history[-MAX_HISTORY_TURNS:]:
         role = "Assistant" if turn.get("role") == "assistant" else "User"
         text = str(turn.get("text") or "").strip()
@@ -624,7 +728,13 @@ def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict
     lines.append(f"User: {user_text}")
     full_prompt = "\n\n".join(lines)
 
-    cmd = build_agent_cli_command(agent, full_prompt, model=model, image_path=saved_image_path)
+    cmd = build_agent_cli_command(
+        agent,
+        full_prompt,
+        model=model,
+        image_path=saved_image_path,
+        web_search=web_search,
+    )
     if not cmd or not shutil.which(cmd[0]):
         emit(
             {
@@ -639,7 +749,15 @@ def run_agent_fallback(user_text: str, saved_image_path: str, history: list[dict
 
     clean_model = "" if (not model or model == "default") else model.strip()
     display_model = (clean_model or "haiku") if agent == "claude" else (clean_model or agent)
-    emit({"type": "meta", "provider": f"agent:{agent}", "model": display_model, "croppedPath": saved_image_path})
+    emit(
+        {
+            "type": "meta",
+            "provider": f"agent:{agent}",
+            "model": display_model,
+            "croppedPath": saved_image_path,
+            "webSearch": bool(web_search),
+        }
+    )
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.DEVNULL,
@@ -723,6 +841,7 @@ def main() -> int:
     window_info = req_data.get("windowInfo")
     history = req_data.get("history") or []
     task = str(req_data.get("task") or "general").strip().lower()
+    web_search = bool(req_data.get("webSearch"))
 
     config = load_config()
     max_dim = int(config.get("maxImageDim") or 1920)
@@ -737,17 +856,24 @@ def main() -> int:
         model = resolved["model"]
 
         if provider == "agent":
-            run_agent_fallback(user_text, saved_path, history, model=model, cli=str(resolved.get("cli") or "default"))
+            run_agent_fallback(
+                user_text,
+                saved_path,
+                history,
+                model=model,
+                cli=str(resolved.get("cli") or "default"),
+                web_search=web_search,
+            )
             return 0
 
         if provider == "gemini":
             api_key = resolved.get("apiKey") or ""
             if not api_key:
                 raise RuntimeError("Missing Gemini API key (set GEMINI_API_KEY or ~/.config/omarchy/screenlens.json)")
-            emit({"type": "meta", "provider": "gemini", "model": model, "croppedPath": saved_path})
+            emit({"type": "meta", "provider": "gemini", "model": model, "croppedPath": saved_path, "webSearch": web_search})
             safe_model = urllib.parse.quote(model, safe=".-_")
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{safe_model}:streamGenerateContent?alt=sse"
-            body = json.dumps(build_gemini_payload(user_text, image_b64, mime, history)).encode("utf-8")
+            body = json.dumps(build_gemini_payload(user_text, image_b64, mime, history, web_search=web_search)).encode("utf-8")
             req = urllib.request.Request(
                 url,
                 data=body,
@@ -762,8 +888,10 @@ def main() -> int:
             api_key = resolved.get("apiKey") or ""
             if not api_key:
                 raise RuntimeError("Missing Anthropic API key (set ANTHROPIC_API_KEY or ~/.config/omarchy/screenlens.json)")
-            emit({"type": "meta", "provider": "anthropic", "model": model, "croppedPath": saved_path})
-            body = json.dumps(build_anthropic_payload(model, user_text, image_b64, mime, history)).encode("utf-8")
+            emit({"type": "meta", "provider": "anthropic", "model": model, "croppedPath": saved_path, "webSearch": web_search})
+            body = json.dumps(
+                build_anthropic_payload(model, user_text, image_b64, mime, history, web_search=web_search)
+            ).encode("utf-8")
             req = urllib.request.Request(
                 "https://api.anthropic.com/v1/messages",
                 data=body,
@@ -782,24 +910,39 @@ def main() -> int:
             api_key = resolved.get("apiKey") or ""
             if not api_key:
                 raise RuntimeError("Missing OpenAI API key (set OPENAI_API_KEY or ~/.config/omarchy/screenlens.json)")
-            emit({"type": "meta", "provider": "openai", "model": model, "croppedPath": saved_path})
-            body = json.dumps(build_openai_payload(model, user_text, image_b64, mime, history)).encode("utf-8")
-            req = urllib.request.Request(
-                "https://api.openai.com/v1/chat/completions",
-                data=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {api_key}",
-                },
-                method="POST",
-            )
-            stream_http(req, parse_openai_sse_line)
+            emit({"type": "meta", "provider": "openai", "model": model, "croppedPath": saved_path, "webSearch": web_search})
+            if web_search:
+                body = json.dumps(
+                    build_openai_responses_payload(model, user_text, image_b64, mime, history, web_search=True)
+                ).encode("utf-8")
+                req = urllib.request.Request(
+                    "https://api.openai.com/v1/responses",
+                    data=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {api_key}",
+                    },
+                    method="POST",
+                )
+                stream_http(req, parse_openai_responses_sse_line)
+            else:
+                body = json.dumps(build_openai_payload(model, user_text, image_b64, mime, history)).encode("utf-8")
+                req = urllib.request.Request(
+                    "https://api.openai.com/v1/chat/completions",
+                    data=body,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {api_key}",
+                    },
+                    method="POST",
+                )
+                stream_http(req, parse_openai_sse_line)
             emit({"type": "done"})
             return 0
 
         if provider == "ollama":
             host = resolved["host"]
-            emit({"type": "meta", "provider": "ollama", "model": model, "croppedPath": saved_path})
+            emit({"type": "meta", "provider": "ollama", "model": model, "croppedPath": saved_path, "webSearch": False})
             body = json.dumps(build_ollama_payload(model, user_text, image_b64, history)).encode("utf-8")
             req = urllib.request.Request(
                 f"{host}/api/chat",

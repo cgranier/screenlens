@@ -51,6 +51,8 @@ Item {
   property bool streaming: false
   property string streamingText: ""
   property string providerLabel: ""
+  property bool webSearchEnabled: false
+  property bool answerUsedWebSearch: false
   property string errorMessage: ""
   property string toastMessage: ""
   property int loadingTick: 0
@@ -166,6 +168,8 @@ Item {
     root.streaming = false
     root.streamingText = ""
     root.providerLabel = ""
+    root.webSearchEnabled = false
+    root.answerUsedWebSearch = false
     root.errorMessage = ""
     root.toastMessage = ""
     root.voiceState = "idle"
@@ -256,6 +260,7 @@ Item {
 
     root.errorMessage = ""
     root.streamingText = ""
+    root.answerUsedWebSearch = false
     root.loadingTick = 0
     root.loadingElapsedSec = 0
     root.streaming = true
@@ -267,7 +272,8 @@ Item {
       crop: root.currentImageCrop(),
       selectedText: root.selectedText,
       windowInfo: { class: root.windowClass, title: root.windowTitle },
-      history: history
+      history: history,
+      webSearch: root.webSearchEnabled
     }
     root.pendingAskJson = JSON.stringify(payload)
     askProc.running = false
@@ -297,6 +303,7 @@ Item {
       var prov = String(ev.provider || "")
       var mod = String(ev.model || "")
       root.providerLabel = (prov && mod && prov !== mod) ? (prov + " · " + mod) : (mod || prov)
+      root.answerUsedWebSearch = (ev.webSearch === true)
     } else if (ev.type === "delta") {
       root.streamingText += String(ev.text || "")
       Qt.callLater(root.scrollAnswersToBottom)
@@ -1263,6 +1270,41 @@ Item {
                 font.letterSpacing: 0.8
               }
 
+              Rectangle {
+                visible: root.answerUsedWebSearch
+                anchors.verticalCenter: parent.verticalCenter
+                radius: Math.min(3, root.cornerRadius)
+                color: Util.alpha(root.accentColor, 0.16)
+                border.width: 1
+                border.color: Util.alpha(root.accentColor, 0.42)
+                implicitWidth: webBadgeRow.implicitWidth + Style.space(10)
+                implicitHeight: webBadgeRow.implicitHeight + Style.space(4)
+
+                Row {
+                  id: webBadgeRow
+                  anchors.centerIn: parent
+                  spacing: Style.space(4)
+
+                  PlainText {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "󰖟"
+                    color: root.accentColor
+                    font.family: root.uiFont
+                    font.pixelSize: Style.font.caption
+                  }
+
+                  PlainText {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: strings.t("status.webGrounded")
+                    color: root.accentColor
+                    font.family: root.uiFont
+                    font.pixelSize: Style.font.caption
+                    font.bold: true
+                    font.letterSpacing: 0.6
+                  }
+                }
+              }
+
               PlainText {
                 visible: root.streaming
                 anchors.verticalCenter: parent.verticalCenter
@@ -1307,6 +1349,7 @@ Item {
                   root.cancelStreaming()
                   root.messages = []
                   root.errorMessage = ""
+                  root.answerUsedWebSearch = false
                 }
               }
             }
@@ -1452,7 +1495,7 @@ Item {
                     anchors.right: elapsedLabel.left
                     anchors.rightMargin: Style.spacing.sm
                     anchors.verticalCenter: parent.verticalCenter
-                    text: strings.t("status.analyzing")
+                    text: root.webSearchEnabled ? strings.t("status.searchingWeb") : strings.t("status.analyzing")
                     color: root.fgColor
                     font.family: root.uiFont
                     font.pixelSize: Style.font.body
@@ -1652,10 +1695,10 @@ Item {
           anchors.leftMargin: promptBar.contentLeftInset
           spacing: Style.spacing.xs
 
-          // Context badge & live voice status strip
+          // Context badge, Web Search grounding toggle & live voice status strip
           Item {
             width: parent.width
-            implicitHeight: Math.max(ctxBadge.implicitHeight, voiceStrip.implicitHeight)
+            implicitHeight: Math.max(ctxBadge.implicitHeight, webSearchToggle.implicitHeight, voiceStrip.implicitHeight)
 
             Rectangle {
               id: ctxBadge
@@ -1693,11 +1736,67 @@ Item {
               }
             }
 
+            // Optional Live Web Search grounding toggle pill (Ctrl+G)
+            Rectangle {
+              id: webSearchToggle
+              anchors.left: ctxBadge.right
+              anchors.leftMargin: Style.spacing.xs
+              anchors.verticalCenter: parent.verticalCenter
+              radius: Math.min(4, root.cornerRadius)
+              color: root.webSearchEnabled
+                ? Util.alpha(root.accentColor, 0.22)
+                : (webToggleHover.hovered ? root.hoverFill : root.restFill)
+              border.width: 1
+              border.color: root.webSearchEnabled
+                ? Util.alpha(root.accentColor, 0.72)
+                : (webToggleHover.hovered ? Util.alpha(root.fgColor, 0.28) : root.hairlineColor)
+              implicitHeight: ctxBadge.implicitHeight
+              implicitWidth: webToggleRow.implicitWidth + Style.space(14)
+
+              Row {
+                id: webToggleRow
+                anchors.centerIn: parent
+                spacing: Style.space(5)
+
+                PlainText {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "󰖟"
+                  color: root.webSearchEnabled ? root.accentColor : root.mutedInk
+                  font.family: root.uiFont
+                  font.pixelSize: Style.font.caption
+                }
+
+                PlainText {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: strings.t("prompt.webSearch")
+                  color: root.webSearchEnabled ? root.fgColor : Util.alpha(root.fgColor, 0.72)
+                  font.family: root.uiFont
+                  font.pixelSize: Style.font.caption
+                  font.bold: root.webSearchEnabled
+                }
+              }
+
+              HoverHandler { id: webToggleHover; cursorShape: Qt.PointingHandCursor }
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  root.webSearchEnabled = !root.webSearchEnabled
+                  promptField.forceActiveFocus()
+                }
+              }
+
+              Ui.PanelToolTip {
+                visible: webToggleHover.hovered
+                text: strings.t("prompt.webSearchTooltip")
+              }
+            }
+
             // Live voice recording waveform & status
             Row {
               id: voiceStrip
               visible: root.voiceState !== "idle"
-              anchors.left: ctxBadge.right
+              anchors.left: webSearchToggle.right
               anchors.leftMargin: Style.spacing.sm
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(6)
@@ -1736,6 +1835,7 @@ Item {
 
             // Quiet keyboard hints aligned right
             Row {
+              visible: root.voiceState === "idle"
               anchors.right: parent.right
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(8)
@@ -1748,6 +1848,18 @@ Item {
                   anchors.verticalCenter: parent.verticalCenter
                   text: "Mode"
                   color: root.mutedInk
+                  font.family: root.uiFont
+                  font.pixelSize: Style.font.caption
+                }
+              }
+
+              Row {
+                spacing: Style.space(4)
+                SLUi.KeyCap { anchors.verticalCenter: parent.verticalCenter; label: "Ctrl+G"; fgColor: root.fgColor; cornerRadius: root.cornerRadius; uiFont: root.uiFont }
+                PlainText {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: strings.t("prompt.webSearch")
+                  color: root.webSearchEnabled ? root.accentColor : root.mutedInk
                   font.family: root.uiFont
                   font.pixelSize: Style.font.caption
                 }
@@ -1814,6 +1926,9 @@ Item {
                   event.accepted = true
                 } else if (event.key === Qt.Key_Tab) {
                   root.mode = (root.mode === "lasso") ? "text" : "lasso"
+                  event.accepted = true
+                } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_G) {
+                  root.webSearchEnabled = !root.webSearchEnabled
                   event.accepted = true
                 } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_M) {
                   root.toggleVoice()
