@@ -118,6 +118,8 @@ PROVIDER_CATALOG = {
 DEFAULT_CONFIG = {
     "schemaVersion": 2,
     "keybind": "SUPER + ALT + A",
+    "voiceKeybind": "SUPER + ALT + V",
+    "voiceAutoSubmit": True,
     "theme": "system",
     "defaultMode": "lasso",
     "maxImageDim": 1920,
@@ -201,6 +203,8 @@ def normalize_config(raw: dict | None) -> dict:
         dim = 1920
     cfg["maxImageDim"] = max(512, min(3840, dim))
     cfg["autoCheckUpdates"] = bool(cfg.get("autoCheckUpdates", True))
+    cfg["voiceAutoSubmit"] = bool(cfg.get("voiceAutoSubmit", True))
+    cfg["voiceKeybind"] = str(cfg.get("voiceKeybind") or "").strip()
 
     langs = cfg.get("ocrLanguages")
     if not isinstance(langs, list) or not langs:
@@ -294,19 +298,35 @@ def normalize_keybind(chord: str) -> str:
     return " + ".join([*mods, key])
 
 
-def render_bindings_block(chord: str, rebind: bool = False) -> str:
+def render_bindings_block(
+    chord: str,
+    rebind: bool = False,
+    voice_chord: str = "",
+    voice_rebind: bool = False,
+) -> str:
     fn = "o.rebind" if rebind else "o.bind"
-    return "\n".join(
-        [
-            BLOCK_BEGIN,
-            f'{fn}("{chord}", "ScreenLens (AI screen overlay)", {{ panel = "{PLUGIN_ID}" }})',
-            BLOCK_END,
-        ]
-    )
+    lines = [
+        BLOCK_BEGIN,
+        f'{fn}("{chord}", "ScreenLens (AI screen overlay)", {{ panel = "{PLUGIN_ID}" }})',
+    ]
+    clean_voice = str(voice_chord or "").strip()
+    if clean_voice:
+        vfn = "o.rebind" if voice_rebind else "o.bind"
+        lines.append(
+            f'{vfn}("{clean_voice}", "ScreenLens Voice (ask by voice)", "omarchy-shell shell summon {PLUGIN_ID} \'{{\\"voice\\":true}}\'")'
+        )
+    lines.append(BLOCK_END)
+    return "\n".join(lines)
 
 
-def apply_bindings_text(existing: str, chord: str, rebind: bool = False) -> str:
-    block = render_bindings_block(chord, rebind=rebind)
+def apply_bindings_text(
+    existing: str,
+    chord: str,
+    rebind: bool = False,
+    voice_chord: str = "",
+    voice_rebind: bool = False,
+) -> str:
+    block = render_bindings_block(chord, rebind=rebind, voice_chord=voice_chord, voice_rebind=voice_rebind)
     begin_idx = existing.find(BLOCK_BEGIN)
     end_idx = existing.find(BLOCK_END)
     if begin_idx != -1 and end_idx != -1 and end_idx > begin_idx:
@@ -328,6 +348,20 @@ def read_keybind_from_bindings(bindings_path: str = BINDINGS_PATH) -> str:
     escaped_id = re.escape(PLUGIN_ID)
     match = re.search(
         rf'o\.(?:re)?bind\(\s*"([^"]+)"\s*,\s*"[^"]*"\s*,\s*\{{\s*panel\s*=\s*"(?:{escaped_id}|carlos\.screenlens)"\s*\}}\s*\)',
+        text,
+    )
+    return match.group(1) if match else ""
+
+
+def read_voice_keybind_from_bindings(bindings_path: str = BINDINGS_PATH) -> str:
+    try:
+        with open(bindings_path, "r", encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return ""
+    escaped_id = re.escape(PLUGIN_ID)
+    match = re.search(
+        rf'o\.(?:re)?bind\(\s*"([^"]+)"\s*,\s*"[^"]*"\s*,\s*"omarchy-shell\s+shell\s+summon\s+(?:{escaped_id}|carlos\.screenlens)[^\n]*voice[^\n]*"\s*\)',
         text,
     )
     return match.group(1) if match else ""
@@ -421,8 +455,20 @@ def set_keybind(
     bindings_path: str = BINDINGS_PATH,
     config_path: str = CONFIG_PATH,
     reload_hyprland: bool = True,
+    voice_chord: str | None = None,
+    voice_rebind: bool | None = None,
 ) -> dict:
     normalized = normalize_keybind(chord)
+    existing_voice = read_voice_keybind_from_bindings(bindings_path)
+    if voice_chord is None:
+        normalized_voice = existing_voice
+    else:
+        raw_voice = str(voice_chord or "").strip()
+        normalized_voice = normalize_keybind(raw_voice) if raw_voice else ""
+    if normalized_voice and normalized_voice == normalized:
+        raise ValueError("Voice keybind must be different from the main ScreenLens keybind")
+    eff_voice_rebind = rebind if voice_rebind is None else bool(voice_rebind)
+
     existing = ""
     had_file = os.path.isfile(bindings_path)
     if had_file:
@@ -434,7 +480,13 @@ def set_keybind(
         backup_path = f"{bindings_path}.bak.{int(time.time())}"
         shutil.copy2(bindings_path, backup_path)
 
-    updated = apply_bindings_text(existing, normalized, rebind=rebind)
+    updated = apply_bindings_text(
+        existing,
+        normalized,
+        rebind=rebind,
+        voice_chord=normalized_voice,
+        voice_rebind=eff_voice_rebind,
+    )
     parent = os.path.dirname(os.path.abspath(bindings_path))
     os.makedirs(parent, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(prefix=".bindings.", suffix=".tmp", dir=parent)
@@ -459,8 +511,10 @@ def set_keybind(
 
     cfg = load_config(config_path)
     cfg["keybind"] = normalized
+    if voice_chord is not None:
+        cfg["voiceKeybind"] = normalized_voice
     save_config(cfg, config_path)
-    return {"ok": True, "keybind": normalized, "backup": backup_path}
+    return {"ok": True, "keybind": normalized, "voiceKeybind": normalized_voice, "backup": backup_path}
 
 
 def main() -> int:
@@ -484,6 +538,13 @@ def main() -> int:
     p_kb.add_argument("--no-reload", action="store_true")
     p_kb.add_argument("--ensure-layer-rule", action="store_true")
 
+    p_vkb = sub.add_parser("set-voice-keybind")
+    p_vkb.add_argument("chord", nargs="?", default="")
+    p_vkb.add_argument("--clear", action="store_true")
+    p_vkb.add_argument("--rebind", action="store_true")
+    p_vkb.add_argument("--no-reload", action="store_true")
+    p_vkb.add_argument("--ensure-layer-rule", action="store_true")
+
     p_layer = sub.add_parser("ensure-layer-rule")
     p_layer.add_argument("--no-reload", action="store_true")
 
@@ -497,6 +558,9 @@ def main() -> int:
             live_kb = read_keybind_from_bindings(args.bindings)
             if live_kb:
                 cfg["keybind"] = live_kb
+            live_voice_kb = read_voice_keybind_from_bindings(args.bindings)
+            if live_voice_kb:
+                cfg["voiceKeybind"] = live_voice_kb
             out = redact_config(cfg) if args.redact else cfg
             print(json.dumps({"ok": True, "config": out}), flush=True)
             return 0
@@ -534,6 +598,26 @@ def main() -> int:
                 bindings_path=args.bindings,
                 config_path=args.config,
                 reload_hyprland=not args.no_reload,
+            )
+            print(json.dumps(res), flush=True)
+            return 0
+
+        if args.cmd == "set-voice-keybind":
+            if args.ensure_layer_rule:
+                ensure_layer_rule(
+                    hyprland_path=args.hyprland,
+                    reload_hyprland=False,
+                )
+            current_main = read_keybind_from_bindings(args.bindings) or load_config(args.config).get("keybind") or DEFAULT_CONFIG["keybind"]
+            target_voice = "" if args.clear else args.chord
+            res = set_keybind(
+                current_main,
+                rebind=args.rebind,
+                bindings_path=args.bindings,
+                config_path=args.config,
+                reload_hyprland=not args.no_reload,
+                voice_chord=target_voice,
+                voice_rebind=args.rebind,
             )
             print(json.dumps(res), flush=True)
             return 0

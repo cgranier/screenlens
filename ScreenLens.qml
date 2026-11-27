@@ -105,6 +105,10 @@ Item {
   property string voiceExpectedAfterInsert: ""
   property string voiceLastTranscript: ""
   property int voiceTick: 0
+  property bool voiceLaunchPending: false
+  property bool voiceAutoSubmitEnabled: true
+  property bool voiceAutoSubmitPending: false
+  property bool voiceAutoSubmitExplicit: false
 
   // Pending stdin payloads / queued commands for Process helpers
   property string pendingAskJson: ""
@@ -151,13 +155,29 @@ Item {
   // ---------------------------------------------------------------- lifecycle
 
   function open(payloadJson) {
+    var launch = Logic.parseLaunchPayload(payloadJson)
     if (root.opened) {
+      if (launch.voice) {
+        if (root.voiceState === "recording") {
+          root.toggleVoice()
+        } else if (root.voiceState === "idle") {
+          root.voiceAutoSubmitExplicit = (launch.autoSubmit !== null)
+          root.voiceAutoSubmitPending = (launch.autoSubmit !== null) ? launch.autoSubmit : root.voiceAutoSubmitEnabled
+          root.toggleVoice()
+        }
+        return
+      }
       root.dismiss()
       return
     }
     if (root.capturing) return
 
     root.resetSession()
+    root.voiceLaunchPending = launch.voice
+    if (launch.voice) {
+      root.voiceAutoSubmitExplicit = (launch.autoSubmit !== null)
+      root.voiceAutoSubmitPending = (launch.autoSubmit !== null) ? launch.autoSubmit : root.voiceAutoSubmitEnabled
+    }
     root.capturing = true
     loadCfgProc.running = false
     loadCfgProc.running = true
@@ -230,6 +250,9 @@ Item {
     root.voicePromptBefore = ""
     root.voiceExpectedAfterInsert = ""
     root.voiceLastTranscript = ""
+    root.voiceLaunchPending = false
+    root.voiceAutoSubmitPending = false
+    root.voiceAutoSubmitExplicit = false
     voiceDedupeTimer.stop()
     promptField.text = ""
   }
@@ -666,6 +689,8 @@ Item {
   function handleEscape() {
     if (root.voiceState === "recording") {
       root.voiceState = "idle"
+      root.voiceAutoSubmitPending = false
+      root.voiceAutoSubmitExplicit = false
       Quickshell.execDetached(["/usr/bin/python3", root.pluginDir + "/scripts/voice.py", "cancel"])
       return
     }
@@ -759,6 +784,10 @@ Item {
         if (res && res.ok && res.config) {
           root.userConfig = res.config
           root.themeMode = String(res.config.theme || "system")
+          root.voiceAutoSubmitEnabled = (res.config.voiceAutoSubmit !== false)
+          if (!root.voiceAutoSubmitExplicit && (root.voiceLaunchPending || root.voiceState === "recording")) {
+            root.voiceAutoSubmitPending = root.voiceAutoSubmitEnabled
+          }
           var defMode = String(res.config.defaultMode || "lasso")
           if ((defMode === "lasso" || defMode === "box" || defMode === "text") && !root.selectionRect && !root.selectedText) {
             root.mode = defMode
@@ -801,6 +830,10 @@ Item {
 
         Qt.callLater(function() {
           promptField.forceActiveFocus()
+          if (root.voiceLaunchPending) {
+            root.voiceLaunchPending = false
+            root.toggleVoice()
+          }
         })
       }
     }
@@ -907,12 +940,26 @@ Item {
       waitForEnd: true
       onStreamFinished: {
         root.voiceState = "idle"
+        var shouldAutoSubmit = root.voiceAutoSubmitPending
+        root.voiceAutoSubmitPending = false
+        root.voiceAutoSubmitExplicit = false
         var res = null
         try { res = JSON.parse(text) } catch (e) { res = null }
         if (res && res.ok) {
           var transcript = String(res.text || "").trim()
           if (transcript) {
             var merged = Logic.mergeVoiceTranscript(root.voicePromptBefore, promptField.text, transcript)
+            if (shouldAutoSubmit && merged.trim().length > 0) {
+              // Arm dedupe with empty expected text so any late Wayland auto-paste
+              // landing after auto-submit is cleanly cleared from promptField.
+              root.voiceExpectedAfterInsert = ""
+              root.voiceLastTranscript = transcript
+              voiceDedupeTimer.restart()
+              promptField.text = ""
+              root.submitPrompt(merged.trim())
+              promptField.forceActiveFocus()
+              return
+            }
             if (merged !== promptField.text) {
               root.voiceExpectedAfterInsert = merged
               root.voiceLastTranscript = transcript
@@ -2250,7 +2297,7 @@ Item {
               PlainText {
                 anchors.verticalCenter: parent.verticalCenter
                 text: root.voiceState === "recording"
-                  ? strings.t("voice.listening")
+                  ? (root.voiceAutoSubmitPending ? strings.t("voice.listeningAutoAsk") : strings.t("voice.listening"))
                   : strings.t("voice.transcribing")
                 color: root.voiceState === "recording" ? root.urgentColor : root.accentColor
                 font.family: root.uiFont
@@ -2332,9 +2379,12 @@ Item {
               foreground: root.fgColor
               accent: root.accentColor
               font.family: root.uiFont
-              onAccepted: root.submitPrompt()
+              onAccepted: {
+                if (root.voiceState === "recording") root.toggleVoice()
+                else root.submitPrompt()
+              }
               onTextChanged: {
-                if (voiceDedupeTimer.running && root.voiceLastTranscript && root.voiceExpectedAfterInsert) {
+                if (voiceDedupeTimer.running && root.voiceLastTranscript) {
                   var cleaned = Logic.dedupeLateVoicePaste(promptField.text, root.voiceExpectedAfterInsert, root.voiceLastTranscript)
                   if (cleaned !== promptField.text) {
                     voiceDedupeTimer.stop()

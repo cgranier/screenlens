@@ -731,16 +731,20 @@ function mergeVoiceTranscript(beforeText, currentText, transcript) {
 }
 
 // Collapses an immediate late auto-paste duplicate if Superwhisper commits the
-// same transcript into the focused field right after ScreenLens inserted it.
+// same transcript into the focused field right after ScreenLens inserted it
+// (or right after auto-submit cleared the input box).
 function dedupeLateVoicePaste(currentText, expectedAfterInsert, transcript) {
   var current = String(currentText || "")
   var expected = String(expectedAfterInsert || "")
   var clean = String(transcript || "").trim()
-  if (!current || !expected || !clean || current === expected) return current
+  if (!current || !clean || current === expected) return current
 
   var normCurrent = _normWhitespace(current)
   var normExpected = _normWhitespace(expected)
   var normClean = _normWhitespace(clean)
+  if (!normExpected) {
+    return normCurrent === normClean ? "" : current
+  }
   if (_countOccurrences(normCurrent, normClean) <= _countOccurrences(normExpected, normClean)) {
     return current
   }
@@ -755,6 +759,28 @@ function dedupeLateVoicePaste(currentText, expectedAfterInsert, transcript) {
     }
   }
   return current
+}
+
+// Safely parses a JSON summon payload passed to ScreenLens.open(payloadJson).
+function parseLaunchPayload(payloadJson) {
+  var out = { voice: false, autoSubmit: null }
+  if (!payloadJson) return out
+  var obj = null
+  if (typeof payloadJson === "object") {
+    obj = payloadJson
+  } else {
+    try { obj = JSON.parse(String(payloadJson)) } catch (e) { obj = null }
+  }
+  if (!obj || typeof obj !== "object") return out
+  if (obj.voice === true || obj.voiceAutoSubmit === true) {
+    out.voice = true
+  }
+  if (typeof obj.voiceAutoSubmit === "boolean") {
+    out.autoSubmit = obj.voiceAutoSubmit
+  } else if (typeof obj.autoSubmit === "boolean") {
+    out.autoSubmit = obj.autoSubmit
+  }
+  return out
 }
 
 // Picks high-contrast foreground ink for a hex color (e.g. text over accent fills).

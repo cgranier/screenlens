@@ -54,6 +54,7 @@ Ui.Panel {
   property var catalog: ({})
   property string omarchyDefaultAgent: ""
   property string keybindDraft: "SUPER + ALT + A"
+  property string voiceKeybindDraft: "SUPER + ALT + V"
   property bool rebindExisting: false
   property bool busy: false
   property string statusText: ""
@@ -126,6 +127,11 @@ Ui.Panel {
   function launchCapture() {
     root.close()
     Util.execArgv(["omarchy-shell", "shell", "summon", root.moduleName, "{}"])
+  }
+
+  function launchVoiceCapture() {
+    root.close()
+    Util.execArgv(["omarchy-shell", "shell", "summon", root.moduleName, '{"voice":true}'])
   }
 
   function loadState() {
@@ -334,6 +340,26 @@ Ui.Panel {
     keybindProc.running = true
   }
 
+  function applyVoiceKeybind() {
+    var chord = String(root.voiceKeybindDraft || "").trim()
+    root.busy = true
+    var cmd = [
+      "/usr/bin/python3",
+      root.pluginDir + "/scripts/config.py",
+      "set-voice-keybind",
+      "--ensure-layer-rule"
+    ]
+    if (chord) {
+      cmd.push(chord)
+    } else {
+      cmd.push("--clear")
+    }
+    if (root.rebindExisting) cmd.push("--rebind")
+    voiceKeybindProc.command = cmd
+    voiceKeybindProc.running = false
+    voiceKeybindProc.running = true
+  }
+
   function cfgVal(key, fallback) {
     if (!root.config || root.config[key] === undefined || root.config[key] === null) return fallback
     return root.config[key]
@@ -481,6 +507,7 @@ Ui.Panel {
         if (res && res.ok && res.config) {
           root.config = res.config
           root.keybindDraft = String(res.config.keybind || "SUPER + ALT + A")
+          root.voiceKeybindDraft = String(res.config.voiceKeybind || "")
           var ol = (res.config.providers && res.config.providers.ollama) ? res.config.providers.ollama : ({})
           root.ollamaHostDraft = String(ol.host || "http://127.0.0.1:11434")
           if (root.opened && !root.updateCheckedThisOpen && res.config.autoCheckUpdates !== false) {
@@ -635,6 +662,30 @@ Ui.Panel {
     }
   }
 
+  Process {
+    id: voiceKeybindProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        root.busy = false
+        var res = null
+        try { res = JSON.parse(text) } catch (e) { res = null }
+        if (res && res.ok) {
+          root.voiceKeybindDraft = String(res.voiceKeybind || "")
+          root.loadState()
+          root.setStatus(
+            res.voiceKeybind
+              ? strings.t("settings.voiceKeybindApplied").arg(res.voiceKeybind)
+              : strings.t("settings.voiceKeybindCleared"),
+            false
+          )
+        } else {
+          root.setStatus((res && res.error) ? res.error : strings.t("settings.keybindFailed"), true)
+        }
+      }
+    }
+  }
+
   // Top-bar widget icon: custom crisp vector viewfinder mark.
   // Left-click toggles Settings, right-click captures screen immediately.
   Ui.BarIconButton {
@@ -700,6 +751,9 @@ Ui.Panel {
         } else if (event.key === Qt.Key_C && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
           root.launchCapture()
           event.accepted = true
+        } else if (event.key === Qt.Key_V && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
+          root.launchVoiceCapture()
+          event.accepted = true
         } else if (event.key === Qt.Key_U && (event.modifiers & Qt.ShiftModifier) && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
           if (root.updateAvailable) root.applyUpdate()
           else root.checkForUpdates(true)
@@ -745,6 +799,52 @@ Ui.Panel {
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.space(6)
+
+            // Quick hands-free Voice-to-ScreenLens launch button (shortcut: v)
+            Rectangle {
+              id: voiceLaunchBtn
+              anchors.verticalCenter: parent.verticalCenter
+              radius: Math.min(4, root.cornerRadius)
+              color: voiceLaunchHover.hovered ? root.hoverFill : root.restFill
+              border.width: 1
+              border.color: voiceLaunchHover.hovered ? Util.alpha(root.accentColor, 0.55) : root.hairline
+              implicitWidth: voiceLaunchRow.implicitWidth + Style.space(14)
+              implicitHeight: Style.space(28)
+
+              Row {
+                id: voiceLaunchRow
+                anchors.centerIn: parent
+                spacing: Style.space(5)
+
+                PlainText {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "󰍬"
+                  color: voiceLaunchHover.hovered ? root.accentColor : root.fgColor
+                  font.family: root.uiFont
+                  font.pixelSize: Style.font.body
+                }
+
+                SLUi.KeyCap {
+                  anchors.verticalCenter: parent.verticalCenter
+                  label: "v"
+                  fgColor: root.fgColor
+                  cornerRadius: root.cornerRadius
+                  uiFont: root.uiFont
+                }
+              }
+
+              HoverHandler { id: voiceLaunchHover; cursorShape: Qt.PointingHandCursor }
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.launchVoiceCapture()
+              }
+
+              Ui.PanelToolTip {
+                visible: voiceLaunchHover.hovered
+                text: strings.t("settings.voiceAskTooltip")
+              }
+            }
 
             // Primary Capture button (Reel-style solid accent with subtle vertical shade)
             Rectangle {
