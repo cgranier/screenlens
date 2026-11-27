@@ -28,10 +28,13 @@ Item {
   property string windowClass: ""
   property string windowTitle: ""
 
-  // Interaction mode: "lasso" (freehand circle / box) or "text" (OCR word selection)
+  // Interaction mode: "lasso" (freehand circle), "box" (rectangle marquee), or "text" (OCR word selection)
   property string mode: "lasso"
+  readonly property bool isRegionMode: mode === "lasso" || mode === "box"
   property var lassoPoints: []
   property var lassoPathPoints: [] // Array of Qt.point() for PathPolyline
+  property var boxStartPoint: null
+  property var boxPreviewRect: null
   property bool draggingCanvas: false
   readonly property int maxPinnedRegions: 6
   property var selectionRects: [] // Array of logical {x, y, w, h} rects
@@ -171,6 +174,8 @@ Item {
     root.mode = "lasso"
     root.lassoPoints = []
     root.lassoPathPoints = []
+    root.boxStartPoint = null
+    root.boxPreviewRect = null
     root.draggingCanvas = false
     root.selectionRects = []
     root.activeRegionIndex = -1
@@ -240,6 +245,8 @@ Item {
   function clearSelection() {
     root.lassoPoints = []
     root.lassoPathPoints = []
+    root.boxStartPoint = null
+    root.boxPreviewRect = null
     root.selectionRects = []
     root.activeRegionIndex = -1
     root.hoverRegionIndex = -1
@@ -249,6 +256,13 @@ Item {
     root.dragStartRect = null
     root.lassoPinMode = false
     root.setSelectedWords([], "", null)
+  }
+
+  function cycleMode(delta) {
+    var order = ["lasso", "box", "text"]
+    var idx = order.indexOf(root.mode)
+    if (idx < 0) idx = 0
+    root.mode = order[(idx + delta + order.length) % order.length]
   }
 
   function removeRegion(idx) {
@@ -669,7 +683,7 @@ Item {
           root.userConfig = res.config
           root.themeMode = String(res.config.theme || "system")
           var defMode = String(res.config.defaultMode || "lasso")
-          if ((defMode === "lasso" || defMode === "text") && !root.selectionRect && !root.selectedText) {
+          if ((defMode === "lasso" || defMode === "box" || defMode === "text") && !root.selectionRect && !root.selectedText) {
             root.mode = defMode
           }
         }
@@ -896,7 +910,7 @@ Item {
           }
         }
 
-        // Start a new lasso drag (Shift+drag pins an additional region).
+        // Start a new region drag (Shift+drag pins an additional region).
         root.draggingCanvas = true
         root.dragRegionIndex = -1
         root.dragHandle = ""
@@ -909,13 +923,22 @@ Item {
           root.selectionRects = []
           root.activeRegionIndex = -1
         }
-        root.lassoPoints = [{ x: mouse.x, y: mouse.y }]
-        root.lassoPathPoints = [Qt.point(mouse.x, mouse.y)]
+        if (root.mode === "box") {
+          root.lassoPoints = []
+          root.lassoPathPoints = []
+          root.boxStartPoint = { x: mouse.x, y: mouse.y }
+          root.boxPreviewRect = null
+        } else {
+          root.boxStartPoint = null
+          root.boxPreviewRect = null
+          root.lassoPoints = [{ x: mouse.x, y: mouse.y }]
+          root.lassoPathPoints = [Qt.point(mouse.x, mouse.y)]
+        }
       }
 
       onPositionChanged: function(mouse) {
         if (!root.draggingCanvas) {
-          if (root.mode === "lasso" && root.selectionRects.length > 0) {
+          if (root.isRegionMode && root.selectionRects.length > 0) {
             var hHit = Logic.hitTestRegions(root.selectionRects, mouse.x, mouse.y, 12)
             root.hoverRegionIndex = hHit.index
             root.hoverHandle = hHit.handle
@@ -959,6 +982,19 @@ Item {
           return
         }
 
+        if (root.mode === "box" && root.boxStartPoint) {
+          root.boxPreviewRect = Logic.computeBoxRect(
+            root.boxStartPoint.x,
+            root.boxStartPoint.y,
+            mouse.x,
+            mouse.y,
+            panel.width,
+            panel.height,
+            2
+          )
+          return
+        }
+
         var pts = root.lassoPoints
         var last = pts.length > 0 ? pts[pts.length - 1] : null
         if (!last || Math.hypot(mouse.x - last.x, mouse.y - last.y) >= 4) {
@@ -985,10 +1021,23 @@ Item {
           return
         }
 
-        if (root.mode === "lasso") {
-          var pts = root.lassoPoints.slice()
-          pts.push({ x: mouse.x, y: mouse.y })
-          var rect = Logic.computeSelectionRect(pts, panel.width, panel.height, 8)
+        if (root.isRegionMode) {
+          var rect = null
+          if (root.mode === "box" && root.boxStartPoint) {
+            rect = Logic.computeBoxRect(
+              root.boxStartPoint.x,
+              root.boxStartPoint.y,
+              mouse.x,
+              mouse.y,
+              panel.width,
+              panel.height,
+              8
+            )
+          } else {
+            var pts = root.lassoPoints.slice()
+            pts.push({ x: mouse.x, y: mouse.y })
+            rect = Logic.computeSelectionRect(pts, panel.width, panel.height, 8)
+          }
           var pin = root.lassoPinMode || (!!(mouse.modifiers & Qt.ShiftModifier) && root.selectionRects.length > 0)
           if (rect) {
             if (pin) {
@@ -1007,6 +1056,8 @@ Item {
           }
           root.lassoPoints = []
           root.lassoPathPoints = []
+          root.boxStartPoint = null
+          root.boxPreviewRect = null
           root.lassoPinMode = false
         }
         promptField.forceActiveFocus()
@@ -1025,6 +1076,10 @@ Item {
       anchors.fill: parent
       regions: root.selectionRects
       imgCrops: root.currentImageCrops()
+      previewRect: root.boxPreviewRect
+      previewImgCrop: root.boxPreviewRect
+        ? Logic.logicalToImageRect(root.boxPreviewRect, panel.width, panel.height, root.imageWidth, root.imageHeight)
+        : null
       activeIndex: root.activeRegionIndex
       hoverIndex: root.dragRegionIndex >= 0 ? root.dragRegionIndex : root.hoverRegionIndex
       activeHandle: root.dragHandle || root.hoverHandle
@@ -1218,7 +1273,7 @@ Item {
         anchors.centerIn: parent
         spacing: Style.spacing.xs
 
-        // Compact recessed segmented mode switcher (Circle | Select Text)
+        // Compact recessed 3-way segmented mode switcher (Circle | Box | Text)
         Rectangle {
           id: modeTrack
           anchors.verticalCenter: parent.verticalCenter
@@ -1234,86 +1289,52 @@ Item {
             anchors.centerIn: parent
             spacing: Style.space(2)
 
-            Rectangle {
-              id: lassoSeg
-              readonly property bool active: root.mode === "lasso"
-              radius: Math.min(3, root.cornerRadius)
-              color: active ? Util.alpha(root.accentColor, 0.22) : (lassoHover.hovered ? root.hoverFill : "transparent")
-              border.width: active ? 1 : 0
-              border.color: Util.alpha(root.accentColor, 0.65)
-              implicitWidth: lassoSegRow.implicitWidth + Style.space(14)
-              implicitHeight: Style.space(24)
+            Repeater {
+              model: [
+                { id: "lasso", icon: "󰒅", label: strings.t("mode.lasso") },
+                { id: "box",   icon: "󰒉", label: strings.t("mode.box") },
+                { id: "text",  icon: "󰗧", label: strings.t("mode.text") }
+              ]
+              delegate: Rectangle {
+                id: modeSeg
+                required property var modelData
+                readonly property bool active: root.mode === modelData.id
+                radius: Math.min(3, root.cornerRadius)
+                color: active ? Util.alpha(root.accentColor, 0.22) : (segHover.hovered ? root.hoverFill : "transparent")
+                border.width: active ? 1 : 0
+                border.color: Util.alpha(root.accentColor, 0.65)
+                implicitWidth: segRow.implicitWidth + Style.space(12)
+                implicitHeight: Style.space(24)
 
-              Row {
-                id: lassoSegRow
-                anchors.centerIn: parent
-                spacing: Style.space(5)
-                PlainText {
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: "󰒅"
-                  color: lassoSeg.active ? root.accentColor : root.mutedInk
-                  font.family: root.uiFont
-                  font.pixelSize: Style.font.body
+                Row {
+                  id: segRow
+                  anchors.centerIn: parent
+                  spacing: Style.space(5)
+                  PlainText {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: modelData.icon
+                    color: modeSeg.active ? root.accentColor : root.mutedInk
+                    font.family: root.uiFont
+                    font.pixelSize: Style.font.body
+                  }
+                  PlainText {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: modelData.label
+                    color: modeSeg.active ? root.fgColor : Util.alpha(root.fgColor, 0.72)
+                    font.family: root.uiFont
+                    font.pixelSize: Style.font.bodySmall
+                    font.bold: modeSeg.active
+                  }
                 }
-                PlainText {
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: strings.t("mode.lasso")
-                  color: lassoSeg.active ? root.fgColor : Util.alpha(root.fgColor, 0.72)
-                  font.family: root.uiFont
-                  font.pixelSize: Style.font.bodySmall
-                  font.bold: lassoSeg.active
-                }
-              }
 
-              HoverHandler { id: lassoHover; cursorShape: Qt.PointingHandCursor }
-              MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                  root.mode = "lasso"
-                  promptField.forceActiveFocus()
-                }
-              }
-            }
-
-            Rectangle {
-              id: textSeg
-              readonly property bool active: root.mode === "text"
-              radius: Math.min(3, root.cornerRadius)
-              color: active ? Util.alpha(root.accentColor, 0.22) : (textModeHover.hovered ? root.hoverFill : "transparent")
-              border.width: active ? 1 : 0
-              border.color: Util.alpha(root.accentColor, 0.65)
-              implicitWidth: textSegRow.implicitWidth + Style.space(14)
-              implicitHeight: Style.space(24)
-
-              Row {
-                id: textSegRow
-                anchors.centerIn: parent
-                spacing: Style.space(5)
-                PlainText {
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: "󰗧"
-                  color: textSeg.active ? root.accentColor : root.mutedInk
-                  font.family: root.uiFont
-                  font.pixelSize: Style.font.body
-                }
-                PlainText {
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: strings.t("mode.text")
-                  color: textSeg.active ? root.fgColor : Util.alpha(root.fgColor, 0.72)
-                  font.family: root.uiFont
-                  font.pixelSize: Style.font.bodySmall
-                  font.bold: textSeg.active
-                }
-              }
-
-              HoverHandler { id: textModeHover; cursorShape: Qt.PointingHandCursor }
-              MouseArea {
-                anchors.fill: parent
-                cursorShape: Qt.PointingHandCursor
-                onClicked: {
-                  root.mode = "text"
-                  promptField.forceActiveFocus()
+                HoverHandler { id: segHover; cursorShape: Qt.PointingHandCursor }
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: {
+                    root.mode = modelData.id
+                    promptField.forceActiveFocus()
+                  }
                 }
               }
             }
@@ -1361,7 +1382,9 @@ Item {
                   ? (root.ocrWords.length > 0
                       ? strings.tn("hint.ocrReady", root.ocrWords.length).arg(Commons.I18n.formatNumber(root.ocrWords.length))
                       : strings.t("hint.ocrEmpty"))
-                  : (root.selectionRects.length > 0 ? strings.t("hint.lassoLocked") : strings.t("hint.lasso")))
+                  : (root.selectionRects.length > 0
+                      ? strings.t("hint.lassoLocked")
+                      : (root.mode === "box" ? strings.t("hint.box") : strings.t("hint.lasso"))))
             color: Util.alpha(root.fgColor, 0.68)
             font.family: root.uiFont
             font.pixelSize: Style.font.caption
@@ -2157,7 +2180,10 @@ Item {
                   root.handleEscape()
                   event.accepted = true
                 } else if (event.key === Qt.Key_Tab) {
-                  root.mode = (root.mode === "lasso") ? "text" : "lasso"
+                  root.cycleMode((event.modifiers & Qt.ShiftModifier) ? -1 : 1)
+                  event.accepted = true
+                } else if (event.key === Qt.Key_Backtab) {
+                  root.cycleMode(-1)
                   event.accepted = true
                 } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_G) {
                   root.webSearchEnabled = !root.webSearchEnabled

@@ -59,6 +59,29 @@ function computeSelectionRect(points, overlayWidth, overlayHeight, padding) {
   return { x: x, y: y, w: w, h: h }
 }
 
+// Computes an exact corner-to-corner bounding box rectangle for Box selection
+// mode, clamped to overlay bounds with zero extra padding.
+function computeBoxRect(x1, y1, x2, y2, overlayWidth, overlayHeight, minSize) {
+  if (!isFinite(x1) || !isFinite(y1) || !isFinite(x2) || !isFinite(y2)) return null
+  if (!(overlayWidth > 0) || !(overlayHeight > 0)) return null
+
+  var minDim = typeof minSize === "number" ? Math.max(1, minSize) : 8
+  var cx1 = clamp(x1, 0, overlayWidth)
+  var cy1 = clamp(y1, 0, overlayHeight)
+  var cx2 = clamp(x2, 0, overlayWidth)
+  var cy2 = clamp(y2, 0, overlayHeight)
+
+  var x = Math.round(Math.min(cx1, cx2))
+  var y = Math.round(Math.min(cy1, cy2))
+  var xEnd = Math.round(Math.max(cx1, cx2))
+  var yEnd = Math.round(Math.max(cy1, cy2))
+  var w = xEnd - x
+  var h = yEnd - y
+
+  if (w < minDim || h < minDim) return null
+  return { x: x, y: y, w: w, h: h }
+}
+
 // Hit-tests a locked crop rectangle for corner resize handles ("nw","ne","sw","se"),
 // edge resize handles ("n","s","e","w"), interior drag ("move"), or outside ("").
 function hitTestCropHandle(rect, px, py, handleMargin) {

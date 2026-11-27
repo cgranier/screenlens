@@ -15,6 +15,8 @@ Item {
 
   property var regions: []         // Array of logical { x, y, w, h }
   property var imgCrops: []        // Parallel array of image-pixel { x, y, w, h }
+  property var previewRect: null   // Live marquee rect while dragging in Box mode
+  property var previewImgCrop: null
   property int activeIndex: -1
   property int hoverIndex: -1
   property string activeHandle: "" // Active or hovered handle ("nw","n",...,"move","")
@@ -30,9 +32,11 @@ Item {
 
   readonly property int regionCount: Array.isArray(regions) ? regions.length : 0
   readonly property bool multiMode: regionCount > 1
-  readonly property var singleRect: regionCount === 1 ? regions[0] : null
+  readonly property var singleRect: regionCount === 1
+    ? regions[0]
+    : (regionCount === 0 && !!previewRect ? previewRect : null)
 
-  visible: regionCount > 0
+  visible: regionCount > 0 || !!previewRect
 
   // Single-crop 4-strip dim scrim (keeps cutout 100% crisp and un-dimmed).
   Item {
@@ -248,6 +252,78 @@ Item {
             }
           }
         }
+      }
+    }
+  }
+
+  // Live marquee bounding box while dragging in Box mode (matches locked crop
+  // styling seamlessly so release locks in with zero visual jump).
+  Item {
+    id: previewItem
+    visible: !!cropOverlay.previewRect
+    anchors.fill: parent
+    readonly property real rx: cropOverlay.previewRect ? cropOverlay.previewRect.x : 0
+    readonly property real ry: cropOverlay.previewRect ? cropOverlay.previewRect.y : 0
+    readonly property real rw: cropOverlay.previewRect ? cropOverlay.previewRect.w : 0
+    readonly property real rh: cropOverlay.previewRect ? cropOverlay.previewRect.h : 0
+
+    Rectangle {
+      x: previewItem.rx - 3
+      y: previewItem.ry - 3
+      width: previewItem.rw + 6
+      height: previewItem.rh + 6
+      radius: Math.min(6, cropOverlay.cornerRadius + 2)
+      color: "transparent"
+      border.width: 4
+      border.color: Util.alpha(cropOverlay.accentColor, 0.28)
+    }
+
+    Rectangle {
+      id: previewFrame
+      x: previewItem.rx
+      y: previewItem.ry
+      width: previewItem.rw
+      height: previewItem.rh
+      radius: Math.min(4, cropOverlay.cornerRadius)
+      color: Util.alpha(cropOverlay.accentColor, 0.06)
+      border.width: 1
+      border.color: Util.alpha(cropOverlay.accentColor, 0.92)
+
+      readonly property real tick: Math.min(18, Math.max(6, Math.min(width / 3, height / 3)))
+      readonly property real arm: 3
+      readonly property real capRadius: Math.min(2, cropOverlay.cornerRadius)
+
+      Rectangle { x: -1; y: -1; width: previewFrame.tick; height: previewFrame.arm; radius: previewFrame.capRadius; color: cropOverlay.accentColor }
+      Rectangle { x: -1; y: -1; width: previewFrame.arm; height: previewFrame.tick; radius: previewFrame.capRadius; color: cropOverlay.accentColor }
+      Rectangle { x: previewFrame.width - previewFrame.tick + 1; y: -1; width: previewFrame.tick; height: previewFrame.arm; radius: previewFrame.capRadius; color: cropOverlay.accentColor }
+      Rectangle { x: previewFrame.width - previewFrame.arm + 1; y: -1; width: previewFrame.arm; height: previewFrame.tick; radius: previewFrame.capRadius; color: cropOverlay.accentColor }
+      Rectangle { x: -1; y: previewFrame.height - previewFrame.arm + 1; width: previewFrame.tick; height: previewFrame.arm; radius: previewFrame.capRadius; color: cropOverlay.accentColor }
+      Rectangle { x: -1; y: previewFrame.height - previewFrame.tick + 1; width: previewFrame.arm; height: previewFrame.tick; radius: previewFrame.capRadius; color: cropOverlay.accentColor }
+      Rectangle { x: previewFrame.width - previewFrame.tick + 1; y: previewFrame.height - previewFrame.arm + 1; width: previewFrame.tick; height: previewFrame.arm; radius: previewFrame.capRadius; color: cropOverlay.accentColor }
+      Rectangle { x: previewFrame.width - previewFrame.arm + 1; y: previewFrame.height - previewFrame.tick + 1; width: previewFrame.arm; height: previewFrame.tick; radius: previewFrame.capRadius; color: cropOverlay.accentColor }
+    }
+
+    Rectangle {
+      visible: !!cropOverlay.previewImgCrop && previewItem.rw >= 48
+      x: Logic.clamp(previewItem.rx, Style.gapsOut, Math.max(Style.gapsOut, cropOverlay.width - width - Style.gapsOut))
+      y: previewItem.ry > height + Style.space(12) ? (previewItem.ry - height - Style.space(6)) : (previewItem.ry + Style.space(6))
+      radius: Math.min(4, cropOverlay.cornerRadius)
+      color: Util.alpha(cropOverlay.bgColor, 0.92)
+      border.width: 1
+      border.color: Util.alpha(cropOverlay.accentColor, 0.60)
+      implicitWidth: previewDimLabel.implicitWidth + Style.space(12)
+      implicitHeight: previewDimLabel.implicitHeight + Style.space(5)
+
+      SLRoot.PlainText {
+        id: previewDimLabel
+        anchors.centerIn: parent
+        text: cropOverlay.previewImgCrop
+          ? (Commons.I18n.formatNumber(cropOverlay.previewImgCrop.w) + " × " + Commons.I18n.formatNumber(cropOverlay.previewImgCrop.h))
+          : ""
+        color: cropOverlay.accentColor
+        font.family: cropOverlay.uiFont
+        font.pixelSize: Style.font.caption
+        font.bold: true
       }
     }
   }

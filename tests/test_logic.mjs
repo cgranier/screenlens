@@ -35,6 +35,12 @@ const lassoRect = sandbox.computeSelectionRect(
 )
 assert.deepEqual(plain(lassoRect), { x: 0, y: 2, w: 208, h: 126 })
 
+// 2a. Box marquee rectangle calculation (normal, reversed, clamped, click rejection)
+assert.equal(sandbox.computeBoxRect(100, 100, 104, 103, 1920, 1080, 8), null)
+assert.deepEqual(plain(sandbox.computeBoxRect(100, 120, 340, 260, 1920, 1080, 8)), { x: 100, y: 120, w: 240, h: 140 })
+assert.deepEqual(plain(sandbox.computeBoxRect(340, 260, 100, 120, 1920, 1080, 8)), { x: 100, y: 120, w: 240, h: 140 })
+assert.deepEqual(plain(sandbox.computeBoxRect(-20, 10, 2000, 1200, 1920, 1080, 8)), { x: 0, y: 10, w: 1920, h: 1070 })
+
 // 2b. Crop handle hit-testing, move/resize clamping, and multi-region stacking
 const box = { x: 100, y: 100, w: 200, h: 150 }
 assert.equal(sandbox.hitTestCropHandle(box, 100, 100, 12), "nw")

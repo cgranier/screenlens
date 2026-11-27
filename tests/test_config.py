@@ -28,6 +28,8 @@ class ConfigBackendTests(unittest.TestCase):
         self.assertEqual(migrated["providers"]["gemini"]["apiKey"], "AIzaSySecretKey1234")
         self.assertEqual(migrated["providers"]["gemini"]["model"], "gemini-2.5-pro")
         self.assertEqual(migrated["maxImageDim"], 3840)
+        self.assertEqual(config_mod.normalize_config({"defaultMode": "box"})["defaultMode"], "box")
+        self.assertEqual(config_mod.normalize_config({"defaultMode": "invalid"})["defaultMode"], "lasso")
 
         redacted = config_mod.redact_config(migrated)
         self.assertEqual(redacted["providers"]["gemini"]["apiKey"], "")
