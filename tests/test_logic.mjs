@@ -242,6 +242,13 @@ assert.equal(plain(sandbox.evaluateLocalUtility("1,450 - 320")).label, "= 1130")
 assert.equal(plain(sandbox.evaluateLocalUtility("2^10")).label, "= 1024")
 assert.equal(plain(sandbox.evaluateLocalUtility("12 × 8")).label, "= 96")
 
+// OCR wrapper punctuation cleanup (bullets, backticks, commas, misread bullet "+ ")
+assert.equal(plain(sandbox.evaluateLocalUtility("`350°F`,")).label, "176.7 °C")
+assert.equal(plain(sandbox.evaluateLocalUtility("· 145 km ·")).label, "90.1 mi")
+assert.equal(plain(sandbox.evaluateLocalUtility("+ (1450 - 320) / 4")).label, "= 282.5")
+assert.equal(plain(sandbox.evaluateLocalUtility("• 18% of $240.")).label, "= $43.20")
+assert.equal(plain(sandbox.evaluateLocalUtility("• 2:30 PM PST, ", { localOffsetMin: -300 })).label, "5:30 PM local")
+
 // Anti-false-positive guards
 assert.equal(sandbox.evaluateLocalUtility("2026-11-28"), null, "ISO dates must not evaluate as subtraction")
 assert.equal(sandbox.evaluateLocalUtility("11/28/2026"), null, "slash dates must not evaluate as division")

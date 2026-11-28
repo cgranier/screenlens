@@ -1260,10 +1260,29 @@ function _safeEvalArithmetic(expr) {
   return result
 }
 
+// Strips stray OCR wrapper punctuation (bullets, backticks, trailing commas/periods)
+// without damaging negative signs, math parentheses, or compound inch marks (5'11").
+function _cleanUtilityInput(text) {
+  var s = String(text || "").replace(/\s+/g, " ").trim()
+  if (!s) return ""
+  // Strip leading bullets, dots, quotes, backticks, chevrons, or bullet misreads ("+ " before non-digit / paren)
+  s = s.replace(/^[•·▪▫◦‣⁃«»`'"*,;:\s]+/, "")
+  // Strip trailing bullets, backticks, commas, semicolons, colons, periods (preserve trailing " after digit for 5'11")
+  s = s.replace(/[•·▪▫◦‣⁃«»`',;:\.\s]+$/, "")
+  if (s.length >= 2 && s[0] === '"' && s[s.length - 1] === '"') {
+    s = s.slice(1, -1).trim()
+  }
+  // If OCR misread a leading bullet dot as "+ " before a unit/temp/time (e.g. "+ 145 km"), strip it.
+  if (/^\+\s+\S/.test(s) && !/^\+\s*\d[\d.,]*\s*[+\-*/×÷^]/.test(s)) {
+    s = s.replace(/^\+\s+/, "")
+  }
+  return s.trim()
+}
+
 // Evaluates short selected text locally (0 ms, zero API calls, zero eval) for
 // temperature, common unit conversions, timezones, percentages, and arithmetic.
 function evaluateLocalUtility(text, opts) {
-  var clean = String(text || "").replace(/\s+/g, " ").trim()
+  var clean = _cleanUtilityInput(text)
   if (clean.length < 2 || clean.length > 64) return null
 
   var o = opts || ({})

@@ -85,11 +85,18 @@ Item {
     }
     return null
   }
+  property string croppedUtilityText: ""
   readonly property var localUtilityResult: {
     var candidate = String(root.selectedText || "").trim()
     if (!candidate && root.selectionRects.length === 1 && !root.ocrLoading && root.ocrWords.length > 0) {
       var extracted = Logic.extractWordsInRect(root.ocrWords, root.selectionRects[0])
-      if (extracted && extracted.text) candidate = String(extracted.text).trim()
+      if (extracted && extracted.text) {
+        var fastRes = Logic.evaluateLocalUtility(extracted.text)
+        if (fastRes) return fastRes
+      }
+    }
+    if (!candidate && root.selectionRects.length === 1 && root.croppedUtilityText) {
+      candidate = root.croppedUtilityText
     }
     if (!candidate) return null
     return Logic.evaluateLocalUtility(candidate)
@@ -294,6 +301,7 @@ Item {
     root.selectedWordMap = ({})
     root.selectedText = ""
     root.selectedTextBounds = null
+    root.croppedUtilityText = ""
     root.messages = []
     root.streaming = false
     root.streamingText = ""
@@ -324,6 +332,7 @@ Item {
   function stopBackgroundWork() {
     if (askProc.running) askProc.running = false
     if (ocrProc.running) ocrProc.running = false
+    if (utilOcrProc.running) utilOcrProc.running = false
     root.pendingExtractCommand = null
     if (extractProc.running) {
       root.extractCancelled = true
@@ -365,7 +374,33 @@ Item {
     root.dragHandle = ""
     root.dragStartRect = null
     root.lassoPinMode = false
+    root.croppedUtilityText = ""
+    if (utilOcrProc.running) utilOcrProc.running = false
     root.setSelectedWords([], "", null)
+  }
+
+  function probeCroppedUtility() {
+    root.croppedUtilityText = ""
+    if (utilOcrProc.running) utilOcrProc.running = false
+    if (!root.screenshotPath || root.selectionRects.length !== 1) return
+    var rect = root.selectionRects[0]
+    if (!rect || rect.w > 720 || rect.h > 200) return
+    // If full-screen OCR already matched cleanly, skip cropped probe.
+    if (!root.ocrLoading && root.ocrWords.length > 0) {
+      var fast = Logic.extractWordsInRect(root.ocrWords, rect)
+      if (fast && fast.text && Logic.evaluateLocalUtility(fast.text)) return
+    }
+    var crop = root.currentImageCrop()
+    if (!crop) return
+    utilOcrProc.command = [
+      "/usr/bin/python3",
+      root.pluginDir + "/scripts/ocr.py",
+      root.screenshotPath,
+      "--text-only",
+      "--crop",
+      crop.x + "," + crop.y + "," + crop.w + "," + crop.h
+    ]
+    utilOcrProc.running = true
   }
 
   function setMode(nextMode) {
@@ -1030,6 +1065,21 @@ Item {
   }
 
   Process {
+    id: utilOcrProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (root.selectionRects.length !== 1) return
+        var res = null
+        try { res = JSON.parse(text) } catch (e) { res = null }
+        if (res && res.ok && res.text) {
+          root.croppedUtilityText = String(res.text).trim()
+        }
+      }
+    }
+  }
+
+  Process {
     id: extractProc
     stdout: StdioCollector {
       waitForEnd: true
@@ -1361,6 +1411,7 @@ Item {
           var postHit = Logic.hitTestRegions(root.selectionRects, mouse.x, mouse.y, 12)
           root.hoverRegionIndex = postHit.index
           root.hoverHandle = postHit.handle
+          root.probeCroppedUtility()
           promptField.forceActiveFocus()
           return
         }
@@ -1403,6 +1454,7 @@ Item {
           root.boxStartPoint = null
           root.boxPreviewRect = null
           root.lassoPinMode = false
+          root.probeCroppedUtility()
         }
         promptField.forceActiveFocus()
       }

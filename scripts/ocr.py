@@ -14,7 +14,28 @@ MAX_WORDS = 3000
 MAX_TEXT_CHARS = 32000
 MAX_CODES = 12
 MIN_CONF = 20.0
+MAX_FULLSCREEN_OCR_DIM = 1280
 _ZBAR_POINT_RE = re.compile(r"([+-]?\d+),([+-]?\d+)")
+
+
+def _tesseract_env() -> dict[str, str]:
+    """Pin Tesseract OpenMP threads to 1 to avoid multi-thread spinlock/timeout hangs on Linux."""
+    env = os.environ.copy()
+    env["OMP_THREAD_LIMIT"] = "1"
+    return env
+
+
+def _read_png_dimensions(data_or_path: bytes | str) -> tuple[int, int]:
+    import struct
+    if isinstance(data_or_path, bytes):
+        header = data_or_path[:24]
+    else:
+        with open(data_or_path, "rb") as f:
+            header = f.read(24)
+    if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
+        return 0, 0
+    w, h = struct.unpack(">II", header[16:24])
+    return int(w), int(h)
 
 
 def is_safe_web_url(value: str) -> bool:
@@ -174,7 +195,7 @@ def run_tesseract_text(tess_input: str, input_bytes: bytes | None, langs: str, p
         "-c",
         "preserve_interword_spaces=1",
     ]
-    proc = subprocess.run(cmd, input=input_bytes, capture_output=True, timeout=20)
+    proc = subprocess.run(cmd, input=input_bytes, capture_output=True, env=_tesseract_env(), timeout=20)
     if proc.returncode != 0:
         err = proc.stderr.decode("utf-8", "replace").strip() or "tesseract failed"
         raise RuntimeError(err)
@@ -243,8 +264,35 @@ def main() -> int:
             print(json.dumps({"ok": True, "text": text}), flush=True)
             return 0
 
-        input_bytes = cropped_png_bytes(args.image, crop_tuple) if crop_tuple else None
-        tess_input = "stdin" if crop_tuple else args.image
+        scale_x = 1.0
+        scale_y = 1.0
+        if crop_tuple:
+            input_bytes = cropped_png_bytes(args.image, crop_tuple)
+            tess_input = "stdin"
+        else:
+            orig_w, orig_h = _read_png_dimensions(args.image)
+            if orig_w > MAX_FULLSCREEN_OCR_DIM or orig_h > MAX_FULLSCREEN_OCR_DIM:
+                res_proc = subprocess.run(
+                    ["magick", args.image, "-resize", f"{MAX_FULLSCREEN_OCR_DIM}x{MAX_FULLSCREEN_OCR_DIM}>", "png:-"],
+                    capture_output=True,
+                    timeout=10,
+                )
+                if res_proc.returncode == 0 and res_proc.stdout:
+                    scaled_w, scaled_h = _read_png_dimensions(res_proc.stdout)
+                    if scaled_w > 0 and scaled_h > 0 and orig_w > 0 and orig_h > 0:
+                        scale_x = orig_w / float(scaled_w)
+                        scale_y = orig_h / float(scaled_h)
+                        input_bytes = res_proc.stdout
+                        tess_input = "stdin"
+                    else:
+                        input_bytes = None
+                        tess_input = args.image
+                else:
+                    input_bytes = None
+                    tess_input = args.image
+            else:
+                input_bytes = None
+                tess_input = args.image
 
         cmd = [
             "tesseract",
@@ -258,13 +306,19 @@ def main() -> int:
             langs,
             "tsv",
         ]
-        proc = subprocess.run(cmd, input=input_bytes, capture_output=True, timeout=20)
+        proc = subprocess.run(cmd, input=input_bytes, capture_output=True, env=_tesseract_env(), timeout=30)
         if proc.returncode != 0:
             err = proc.stderr.decode("utf-8", "replace").strip() or "tesseract failed"
             print(json.dumps({"ok": False, "error": err}), flush=True)
             return 1
         tsv = proc.stdout.decode("utf-8", "replace")
         words = parse_tsv(tsv)
+        if scale_x != 1.0 or scale_y != 1.0:
+            for w in words:
+                w["x"] = int(round(w["x"] * scale_x))
+                w["y"] = int(round(w["y"] * scale_y))
+                w["w"] = max(1, int(round(w["w"] * scale_x)))
+                w["h"] = max(1, int(round(w["h"] * scale_y)))
         codes = scan_barcodes(args.image) if not crop_tuple else []
         print(json.dumps({"ok": True, "words": words, "codes": codes}), flush=True)
         return 0
