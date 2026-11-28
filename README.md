@@ -23,6 +23,7 @@ Summon ScreenLens over any window or workspace, circle or box one or more region
   - **Tables:** **Extract Table** into a clean Markdown table + copyable fenced CSV block.
 - **Standard Quick-Action Chips (`Alt+1..4`):** One-click **Explain**, **Summarize**, **Translate** (to your configured target language), and **Extract Text**.
 - **Optional Live Web Search Grounding (`Ctrl+G`):** Toggle live web search per question (off by default) with a **`WEB`** badge on grounded answers.
+- **Pinned Floating Mini Answer Card (`Ctrl+P`):** Click **Pin** (or press `Ctrl+P`) on any answer to dismiss the fullscreen overlay and float the formatted answer in a draggable, collapsible, click-through corner card (complete with 1-click code-block copy and **Re-expand** back into the full thread) while you work in underlying apps.
 - **Local Session History & Visual Resume (`Ctrl+H`):**
   - Accidentally hit `Esc`? Click **Resume** (or press `Ctrl+H`) to restore your previous conversation **and** its original screen snapshot, complete with OCR and a **Live Screen** toggle.
   - Browse, filter, copy, resume, hand off to agent, or delete saved sessions in **Settings → History**.
@@ -103,6 +104,7 @@ Then optionally delete:
 | `Ctrl + G` | Toggle live Web Search grounding |
 | `Ctrl + M` | Toggle Superwhisper voice dictation inside overlay |
 | `Ctrl + H` | Resume most recent saved conversation (when chat is empty) |
+| `Ctrl + P` | Pin latest answer as a floating, non-blocking mini card |
 | `Alt + 1..4` | Explain / Summarize / Translate / Extract Text |
 | `Alt + 5..6` | Trigger detected Smart Context Action (QR / Diagnose / Extract Table) |
 | `Ctrl + C` | Copy selected text, latest answer, or cropped region |
