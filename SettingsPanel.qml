@@ -46,8 +46,8 @@ Ui.Panel {
   readonly property int cornerRadius: Style.cornerRadius
   readonly property string uiFont: Style.font.family
 
-  property string activeTab: "general" // "general" | "providers" | "tasks" | "language" | "history"
-  readonly property var tabIds: ["general", "providers", "tasks", "language", "history"]
+  property string activeTab: "general" // "general" | "providers" | "tasks" | "language"
+  readonly property var tabIds: ["general", "providers", "tasks", "language"]
 
   // Live config state loaded from 0600 ~/.config/omarchy/screenlens.json
   property var config: ({})
@@ -79,15 +79,6 @@ Ui.Panel {
   property string selectedOcrInstallCode: ""
   property bool installingOcrPack: false
 
-  // Session History tab state
-  property var historySessions: []
-  property int historyStorageBytes: 0
-  property bool historyLoading: false
-  property string historyQuery: ""
-  property string selectedHistoryId: ""
-  property string confirmDeleteId: ""
-  property bool confirmClearAll: false
-
   // Update check state (cached hourly via scripts/updater.py)
   property bool updateChecking: false
   property bool updateAvailable: false
@@ -97,9 +88,12 @@ Ui.Panel {
   property int updateSweepTick: 0
   property bool updateCheckedThisOpen: false
 
-  // Pinned floating mini-card state (survives overlay dismissal)
+  // Ephemeral in-memory state (RAM only — never persisted to disk)
   property bool pinnedVisible: false
   property var pinnedNote: null
+  property var lastThread: null
+  property string pendingEphemWriteJson: ""
+  property string pendingEphemPurpose: "" // "continue" | "restore"
 
   implicitWidth: barButton.implicitWidth
   implicitHeight: barButton.implicitHeight
@@ -120,8 +114,13 @@ Ui.Panel {
       if (root.tabIds.indexOf(tabName) !== -1) root.activeTab = tabName
       root.open()
     }
-    function showPin(): void { root.loadPinnedNote() }
+    function showPinFromFile(path: string): void { root.readEphemIntoPin(path) }
+    function resumePin(): void {
+      if (root.pinnedNote) root.pinnedVisible = true
+    }
     function closePin(): void { root.closePinnedNote() }
+    function stashLastThread(path: string): void { root.readEphemIntoLastThread(path) }
+    function restoreLastThread(): void { root.sendLastThreadToOverlay() }
   }
 
   onOpenedChanged: {
@@ -129,8 +128,6 @@ Ui.Panel {
       root.statusText = ""
       root.statusError = false
       root.updateCheckedThisOpen = false
-      root.confirmDeleteId = ""
-      root.confirmClearAll = false
       root.loadState()
     }
   }
@@ -156,109 +153,55 @@ Ui.Panel {
     loadConfigProc.running = true
     ocrStatusProc.running = false
     ocrStatusProc.running = true
-    root.loadHistory()
     if (Object.keys(root.catalog).length === 0) {
       loadCatalogProc.running = false
       loadCatalogProc.running = true
     }
   }
 
-  function loadHistory() {
-    root.historyLoading = true
-    historyListProc.running = false
-    historyListProc.running = true
-  }
-
-  function pruneHistory() {
-    historyPruneProc.running = false
-    historyPruneProc.running = true
-  }
-
-  function copyText(text) {
-    var s = String(text || "")
-    if (!s) return
-    Quickshell.execDetached(["wl-copy", "--", s.slice(0, 65536)])
-    root.setStatus(strings.t("settings.historyCopied"), false)
-  }
-
-  function resumeHistorySession(sess) {
-    if (!sess || !sess.id) return
-    var sid = String(sess.id)
-    root.close()
-    Util.execArgv(["omarchy-shell", "shell", "summon", root.moduleName, JSON.stringify({ resumeId: sid })])
-  }
-
-  function handoffHistorySession(sess) {
-    if (!sess) return
-    var msgs = Array.isArray(sess.messages) ? sess.messages : []
-    var imgPath = String(sess.framePath || sess.thumbPath || "")
-    Util.execArgv([
-      "/usr/bin/python3",
-      root.pluginDir + "/scripts/actions.py",
-      "handoff-direct",
-      "--image", imgPath,
-      "--crop", "",
-      "--window-class", String(sess.windowClass || ""),
-      "--window-title", String(sess.windowTitle || ""),
-      "--selected-text", String(sess.selectedText || ""),
-      "--draft", "",
-      "--messages-json", JSON.stringify(msgs)
-    ])
-    root.close()
-  }
-
-  function requestDeleteHistorySession(sid) {
-    if (!sid) return
-    if (root.confirmDeleteId !== sid) {
-      root.confirmDeleteId = sid
-      root.confirmClearAll = false
-      confirmResetTimer.restart()
-      return
-    }
-    root.confirmDeleteId = ""
-    confirmResetTimer.stop()
-    historyDeleteProc.command = ["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "delete", sid]
-    historyDeleteProc.running = false
-    historyDeleteProc.running = true
-  }
-
-  function requestClearAllHistory() {
-    if (!root.confirmClearAll) {
-      root.confirmClearAll = true
-      root.confirmDeleteId = ""
-      confirmResetTimer.restart()
-      return
-    }
-    root.confirmClearAll = false
-    confirmResetTimer.stop()
-    historyClearProc.running = false
-    historyClearProc.running = true
-  }
-
-  function loadPinnedNote() {
+  function readEphemIntoPin(path) {
+    var clean = String(path || "").trim()
+    if (!clean) return
     if (Object.keys(root.config || ({})).length === 0) {
       loadConfigProc.running = false
       loadConfigProc.running = true
     }
-    pinLoadProc.running = false
-    pinLoadProc.running = true
+    ephemReadPinProc.command = ["/usr/bin/python3", root.pluginDir + "/scripts/actions.py", "ephem-read", clean]
+    ephemReadPinProc.running = false
+    ephemReadPinProc.running = true
+  }
+
+  function readEphemIntoLastThread(path) {
+    var clean = String(path || "").trim()
+    if (!clean) return
+    ephemReadLastProc.command = ["/usr/bin/python3", root.pluginDir + "/scripts/actions.py", "ephem-read", clean]
+    ephemReadLastProc.running = false
+    ephemReadLastProc.running = true
   }
 
   function closePinnedNote() {
     root.pinnedVisible = false
     root.pinnedNote = null
-    pinClearProc.running = false
-    pinClearProc.running = true
   }
 
-  function reexpandPinnedNote(pinned) {
-    var sid = (pinned && pinned.sessionId) ? String(pinned.sessionId) : ""
+  function continuePinnedOnLiveScreen(pinned) {
+    var note = pinned || root.pinnedNote
+    if (!note) return
+    // Hide the floating mini card while the overlay is open, but keep pinnedNote
+    // alive in RAM so Esc brings it right back and follow-ups update it cleanly.
     root.pinnedVisible = false
-    root.pinnedNote = null
-    Util.execArgv([
-      "omarchy-shell", "shell", "summon", root.moduleName,
-      JSON.stringify({ resumeId: sid, resumePinned: true })
-    ])
+    root.pendingEphemPurpose = "continue"
+    root.pendingEphemWriteJson = JSON.stringify(note)
+    ephemWriteProc.running = false
+    ephemWriteProc.running = true
+  }
+
+  function sendLastThreadToOverlay() {
+    if (!root.lastThread) return
+    root.pendingEphemPurpose = "restore"
+    root.pendingEphemWriteJson = JSON.stringify(root.lastThread)
+    ephemWriteProc.running = false
+    ephemWriteProc.running = true
   }
 
   function isOcrLangActive(code) {
@@ -665,11 +608,6 @@ Ui.Panel {
         if (res && res.ok && res.config) {
           root.config = res.config
           root.setStatus(strings.t("settings.saved"), false)
-          if (root.pendingPatchJson.indexOf("historyMaxSessions") !== -1
-              || root.pendingPatchJson.indexOf("historyRetentionDays") !== -1
-              || root.pendingPatchJson.indexOf("historySaveImages") !== -1) {
-            root.pruneHistory()
-          }
         } else {
           root.setStatus((res && res.error) ? res.error : strings.t("settings.saveFailed"), true)
         }
@@ -807,98 +745,59 @@ Ui.Panel {
     }
   }
 
-  Timer {
-    id: confirmResetTimer
-    interval: 4000
-    repeat: false
-    onTriggered: {
-      root.confirmDeleteId = ""
-      root.confirmClearAll = false
-    }
-  }
-
   Process {
-    id: historyListProc
-    command: ["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "list"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        root.historyLoading = false
-        var res = null
-        try { res = JSON.parse(text) } catch (e) { res = null }
-        if (res && res.ok && Array.isArray(res.sessions)) {
-          root.historySessions = res.sessions
-          root.historyStorageBytes = Number(res.storageBytes) || 0
-        }
-      }
-    }
-  }
-
-  Process {
-    id: historyDeleteProc
+    id: ephemReadPinProc
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
         var res = null
         try { res = JSON.parse(text) } catch (e) { res = null }
-        if (res && res.ok) {
-          root.selectedHistoryId = ""
-          root.loadHistory()
-          root.setStatus(strings.t("settings.historyDeleted"), false)
-        }
-      }
-    }
-  }
-
-  Process {
-    id: historyClearProc
-    command: ["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "clear"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var res = null
-        try { res = JSON.parse(text) } catch (e) { res = null }
-        if (res && res.ok) {
-          root.selectedHistoryId = ""
-          root.historySessions = []
-          root.historyStorageBytes = Number(res.storageBytes) || 0
-          root.setStatus(strings.t("settings.historyCleared"), false)
-        }
-      }
-    }
-  }
-
-  Process {
-    id: historyPruneProc
-    command: ["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "prune"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.loadHistory()
-    }
-  }
-
-  Process {
-    id: pinLoadProc
-    command: ["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "pin-get"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var res = null
-        try { res = JSON.parse(text) } catch (e) { res = null }
-        if (res && res.ok && res.pinned) {
-          root.pinnedNote = res.pinned
+        if (res && res.ok && res.data && (res.data.answer || (Array.isArray(res.data.messages) && res.data.messages.length > 0))) {
+          root.pinnedNote = res.data
+          root.lastThread = res.data
           root.pinnedVisible = true
-        } else {
-          root.pinnedVisible = false
-          root.pinnedNote = null
         }
       }
     }
   }
 
   Process {
-    id: pinClearProc
-    command: ["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "pin-clear"]
+    id: ephemReadLastProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var res = null
+        try { res = JSON.parse(text) } catch (e) { res = null }
+        if (res && res.ok && res.data && Array.isArray(res.data.messages) && res.data.messages.length > 0) {
+          root.lastThread = res.data
+        }
+      }
+    }
+  }
+
+  Process {
+    id: ephemWriteProc
+    stdinEnabled: true
+    command: ["/usr/bin/python3", root.pluginDir + "/scripts/actions.py", "ephem-write", "-"]
+    onStarted: ephemWriteProc.write(root.pendingEphemWriteJson + "\n")
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var purpose = root.pendingEphemPurpose
+        root.pendingEphemPurpose = ""
+        root.pendingEphemWriteJson = ""
+        var res = null
+        try { res = JSON.parse(text) } catch (e) { res = null }
+        if (res && res.ok && res.path) {
+          var payload = (purpose === "continue")
+            ? JSON.stringify({ continueFile: res.path })
+            : JSON.stringify({ restoreFile: res.path })
+          Util.execArgv(["omarchy-shell", "shell", "summon", root.moduleName, payload])
+        } else if (purpose === "continue" && root.pinnedNote) {
+          root.pinnedVisible = true
+        }
+      }
+    }
   }
 
   SLUi.PinnedAnswerCard {
@@ -919,7 +818,7 @@ Ui.Panel {
     onCopyRequested: function(txt) {
       Quickshell.execDetached(["wl-copy", "--", String(txt || "").slice(0, 65536)])
     }
-    onReexpandRequested: function(pinned) { root.reexpandPinnedNote(pinned) }
+    onReexpandRequested: function(pinned) { root.continuePinnedOnLiveScreen(pinned) }
     onCloseRequested: root.closePinnedNote()
   }
 
@@ -1193,8 +1092,7 @@ Ui.Panel {
                 { id: "general",   icon: "󰒓", label: strings.t("settings.tab.general") },
                 { id: "providers", icon: "󰚩", label: strings.t("settings.tab.providers") },
                 { id: "tasks",     icon: "󰒋", label: strings.t("settings.tab.tasks") },
-                { id: "language",  icon: "󰗊", label: strings.t("settings.tab.language") },
-                { id: "history",   icon: "󰋚", label: strings.t("settings.tab.history") }
+                { id: "language",  icon: "󰗊", label: strings.t("settings.tab.language") }
               ]
               delegate: Item {
                 id: tabItem
@@ -1300,13 +1198,6 @@ Ui.Panel {
 
               SLTabs.LanguageTab {
                 visible: root.activeTab === "language"
-                width: parent.width
-                panel: root
-                strings: strings
-              }
-
-              SLTabs.HistoryTab {
-                visible: root.activeTab === "history"
                 width: parent.width
                 panel: root
                 strings: strings

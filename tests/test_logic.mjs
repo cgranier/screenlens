@@ -170,61 +170,23 @@ assert.equal(
   "",
   "late auto-paste after voice auto-submit clears input must be stripped"
 )
-assert.deepEqual(plain(sandbox.parseLaunchPayload("")), { voice: false, autoSubmit: null, resumeId: "", resumeLast: false, resumePinned: false })
-assert.deepEqual(plain(sandbox.parseLaunchPayload('{"voice":true}')), { voice: true, autoSubmit: null, resumeId: "", resumeLast: false, resumePinned: false })
-assert.deepEqual(plain(sandbox.parseLaunchPayload('{"voiceAutoSubmit":true}')), { voice: true, autoSubmit: true, resumeId: "", resumeLast: false, resumePinned: false })
-assert.deepEqual(plain(sandbox.parseLaunchPayload('{"voice":true,"autoSubmit":false}')), { voice: true, autoSubmit: false, resumeId: "", resumeLast: false, resumePinned: false })
-assert.deepEqual(plain(sandbox.parseLaunchPayload('{"resumeId":"sl-123_abc"}')), { voice: false, autoSubmit: null, resumeId: "sl-123_abc", resumeLast: false, resumePinned: false })
-assert.deepEqual(plain(sandbox.parseLaunchPayload('{"resumeId":"../bad"}')), { voice: false, autoSubmit: null, resumeId: "", resumeLast: false, resumePinned: false })
-assert.deepEqual(plain(sandbox.parseLaunchPayload('{"resumeLast":true}')), { voice: false, autoSubmit: null, resumeId: "", resumeLast: true, resumePinned: false })
-assert.deepEqual(plain(sandbox.parseLaunchPayload('{"resumePinned":true}')), { voice: false, autoSubmit: null, resumeId: "", resumeLast: false, resumePinned: true })
-assert.deepEqual(plain(sandbox.parseLaunchPayload("not-json")), { voice: false, autoSubmit: null, resumeId: "", resumeLast: false, resumePinned: false })
+assert.deepEqual(plain(sandbox.parseLaunchPayload("")), { voice: false, autoSubmit: null, continueFile: "", restoreFile: "" })
+assert.deepEqual(plain(sandbox.parseLaunchPayload('{"voice":true}')), { voice: true, autoSubmit: null, continueFile: "", restoreFile: "" })
+assert.deepEqual(plain(sandbox.parseLaunchPayload('{"voiceAutoSubmit":true}')), { voice: true, autoSubmit: true, continueFile: "", restoreFile: "" })
+assert.deepEqual(plain(sandbox.parseLaunchPayload('{"voice":true,"autoSubmit":false}')), { voice: true, autoSubmit: false, continueFile: "", restoreFile: "" })
+assert.deepEqual(plain(sandbox.parseLaunchPayload('{"continueFile":"/tmp/omarchy-screenlens-ipc-1000-1700000000000-abcdef123456.json"}')), {
+  voice: false, autoSubmit: null, continueFile: "/tmp/omarchy-screenlens-ipc-1000-1700000000000-abcdef123456.json", restoreFile: ""
+})
+assert.deepEqual(plain(sandbox.parseLaunchPayload('{"continueFile":"/etc/passwd"}')), { voice: false, autoSubmit: null, continueFile: "", restoreFile: "" })
+assert.deepEqual(plain(sandbox.parseLaunchPayload('{"restoreFile":"/tmp/omarchy-screenlens-ipc-1000-1700000000000-1234567890ab.json"}')), {
+  voice: false, autoSubmit: null, continueFile: "", restoreFile: "/tmp/omarchy-screenlens-ipc-1000-1700000000000-1234567890ab.json"
+})
+assert.deepEqual(plain(sandbox.parseLaunchPayload("not-json")), { voice: false, autoSubmit: null, continueFile: "", restoreFile: "" })
 
 // Floating mini-card position clamping
 assert.deepEqual(plain(sandbox.clampFloatingPosition(-40, -10, 380, 260, 1440, 960, 18)), { x: 18, y: 18 })
 assert.deepEqual(plain(sandbox.clampFloatingPosition(1300, 900, 380, 260, 1440, 960, 18)), { x: 1042, y: 682 })
 assert.deepEqual(plain(sandbox.clampFloatingPosition(400, 300, 380, 260, 1440, 960, 18)), { x: 400, y: 300 })
-
-// History preview, filtering, and relative time helpers
-const sampleSessions = [
-  {
-    id: "sl-1",
-    updatedAt: 1700000000000,
-    windowClass: "chromium",
-    windowTitle: "GitHub",
-    providerLabel: "gemini",
-    messages: [
-      { role: "user", text: "Explain this **traceback**" },
-      { role: "assistant", text: "Missing `requests` package." }
-    ]
-  },
-  {
-    id: "sl-2",
-    updatedAt: 1699990000000,
-    windowClass: "ghostty",
-    windowTitle: "zsh",
-    providerLabel: "claude",
-    messages: [
-      { role: "user", text: "What does df -h say?" },
-      { role: "assistant", text: "Root disk is 42% full." }
-    ]
-  }
-]
-const prev1 = plain(sandbox.sessionPreview(sampleSessions[0]))
-assert.equal(prev1.title, "Explain this **traceback**")
-assert.equal(prev1.snippet, "Missing requests package.")
-assert.equal(prev1.turns, 2)
-assert.equal(plain(sandbox.filterHistorySessions(sampleSessions, "disk")).length, 1)
-assert.equal(plain(sandbox.filterHistorySessions(sampleSessions, "disk"))[0].id, "sl-2")
-assert.equal(plain(sandbox.filterHistorySessions(sampleSessions, "chromium")).length, 1)
-assert.equal(sandbox.formatRelativeTime(1000000, 1020000), "Just now")
-assert.equal(sandbox.formatRelativeTime(1000000, 1000000 + 5 * 60 * 1000), "5m ago")
-assert.equal(sandbox.formatRelativeTime(1000000, 1000000 + 3 * 3600 * 1000), "3h ago")
-assert.equal(sandbox.formatRelativeTime(1000000, 1000000 + 26 * 3600 * 1000), "Yesterday")
-assert.equal(sandbox.formatBytes(0), "0 B")
-assert.equal(sandbox.formatBytes(840), "840 B")
-assert.equal(sandbox.formatBytes(145000), "142 KB")
-assert.equal(sandbox.formatBytes(1887436), "1.8 MB")
 
 // 8. Contrast ink helper and PlainText-safe answer block parser
 assert.equal(sandbox.inkOn("#f5f6fa"), "#101315")

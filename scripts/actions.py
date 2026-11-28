@@ -3,13 +3,72 @@
 
 import argparse
 import base64
+import glob
 import json
 import os
+import re
+import secrets
 import shutil
 import subprocess
 import sys
 import time
 import urllib.parse
+
+EPHEM_PREFIX = "/tmp/omarchy-screenlens-ipc-"
+EPHEM_STALE_SECONDS = 60
+
+
+def _ephem_path_valid(path: str) -> bool:
+    p = str(path or "").strip()
+    uid = os.getuid()
+    return bool(re.match(rf"^/tmp/omarchy-screenlens-ipc-{uid}-[0-9]+-[A-Za-z0-9]{{8,16}}\.json$", p))
+
+
+def ephem_write_json(raw_json: str) -> dict:
+    """Write an ephemeral 0600 JSON payload to /tmp for one-shot IPC transfer (unlinked on read)."""
+    # Clean any orphaned ephemeral handoff files older than 60s.
+    now = time.time()
+    for stale in glob.glob(f"{EPHEM_PREFIX}{os.getuid()}-*.json"):
+        try:
+            if now - os.path.getmtime(stale) > EPHEM_STALE_SECONDS:
+                os.unlink(stale)
+        except OSError:
+            pass
+
+    parsed = json.loads(raw_json) if str(raw_json or "").strip() else {}
+    if not isinstance(parsed, dict):
+        raise ValueError("Payload must be a JSON object")
+
+    path = f"{EPHEM_PREFIX}{os.getuid()}-{int(now * 1000)}-{secrets.token_hex(6)}.json"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.chmod(path, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(parsed, f)
+    except Exception:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        raise
+    return {"ok": True, "path": path}
+
+
+def ephem_read_json(path: str) -> dict:
+    """Read and immediately unlink an ephemeral 0600 IPC payload file."""
+    if not _ephem_path_valid(path):
+        return {"ok": False, "error": "Invalid ephemeral payload path"}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        return {"ok": False, "error": str(exc)}
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    return {"ok": True, "data": data}
 
 
 def validate_web_url(url: str) -> str:
@@ -338,6 +397,12 @@ def main() -> int:
     p_direct.add_argument("--messages-json", default="[]")
     p_direct.add_argument("--dry-run", action="store_true")
 
+    p_ew = sub.add_parser("ephem-write")
+    p_ew.add_argument("source", nargs="?", default="-")
+
+    p_er = sub.add_parser("ephem-read")
+    p_er.add_argument("path")
+
     args = parser.parse_args()
     if args.cmd == "copy-text":
         return copy_text_from_file(args.file)
@@ -354,6 +419,18 @@ def main() -> int:
         return 0
     if args.cmd == "handoff":
         return handoff_to_agent(args.file)
+    if args.cmd == "ephem-write":
+        try:
+            raw = sys.stdin.readline() if args.source == "-" else open(args.source, "r", encoding="utf-8").read()
+            print(json.dumps(ephem_write_json(raw)), flush=True)
+            return 0
+        except Exception as exc:
+            print(json.dumps({"ok": False, "error": str(exc)}), flush=True)
+            return 1
+    if args.cmd == "ephem-read":
+        res = ephem_read_json(args.path)
+        print(json.dumps(res), flush=True)
+        return 0 if res.get("ok") else 1
     if args.cmd == "handoff-direct":
         try:
             result = handoff_direct(args, dry_run=args.dry_run)
