@@ -23,21 +23,17 @@ Summon ScreenLens over any window or workspace, circle or box one or more region
   - **Tables:** **Extract Table** into a clean Markdown table + copyable fenced CSV block.
 - **Standard Quick-Action Chips (`Alt+1..4`):** One-click **Explain**, **Summarize**, **Translate** (to your configured target language), and **Extract Text**.
 - **Optional Live Web Search Grounding (`Ctrl+G`):** Toggle live web search per question (off by default) with a **`WEB`** badge on grounded answers.
-- **Pinned Floating Mini Answer Card (`Ctrl+P`):** Click **Pin** (or press `Ctrl+P`) on any answer to dismiss the fullscreen overlay and float the formatted answer in a draggable, collapsible, click-through corner card (complete with 1-click code-block copy and **Re-expand** back into the full thread) while you work in underlying apps.
-- **Local Session History & Visual Resume (`Ctrl+H`):**
-  - Accidentally hit `Esc`? Click **Resume** (or press `Ctrl+H`) to restore your previous conversation **and** its original screen snapshot, complete with OCR and a **Live Screen** toggle.
-  - Browse, filter, copy, resume, hand off to agent, or delete saved sessions in **Settings → History**.
-  - Privacy-first & bounded: `0600` owner-only storage in `~/.local/state/omarchy/screenlens/`, 24h default auto-expiry (`24h | 3d | 7d | 30d`), hard 10 MB frame cap, and a text-only toggle to disable saving snapshots completely.
+- **Pinned Floating Mini Answer Card (`Ctrl+P`):** Click **Pin** (or press `Ctrl+P`) on any answer to dismiss the fullscreen overlay and float the formatted answer in a draggable, collapsible, click-through corner card (complete with 1-click code-block copy) while you work in underlying apps. Click **`󰁌`** on the mini card anytime to continue the same conversation directly against your **current live screen** — pressing `Esc` keeps or updates the pinned card until you explicitly click `×` to unpin.
+- **Instant In-Memory Undo (`Ctrl+Z`):** Accidentally hit `Esc`? Reopen ScreenLens and press `Ctrl+Z` (with an empty prompt) to restore your last dismissed conversation from RAM onto your live screen — zero files written to disk.
 - **Hybrid AI Backend + Agent Handoff:**
   - Streams fast direct Vision responses from **Google Gemini**, **Anthropic Claude**, **OpenAI**, or local **Ollama**.
   - Falls back automatically to your **Omarchy CLI Agent** (`claude`, `codex`, `agy`, `opencode`, `grok`, `gemini`, or your Omarchy default) when no direct API key is configured.
   - **Continue in Agent (`Ctrl+Shift+Enter`):** Hands the screenshot, cropped region, selected OCR text, and conversation history to your chosen CLI agent in a terminal.
 - **Native Tabbed Settings Panel:** Left-click the bar widget (or click the gear icon inside the overlay) to configure:
-  - **General:** Managed Hyprland keybinds (`Super + Alt + A` & Voice Ask `Super + Alt + V`, with backup + `hyprctl` validation & rollback), default selection mode, theme (`System` / `Dark` / `Light` preserving your live Omarchy accent), max image dimension, and session history retention/privacy controls.
+  - **General:** Managed Hyprland keybinds (`Super + Alt + A` & Voice Ask `Super + Alt + V`, with backup + `hyprctl` validation & rollback), default selection mode, theme (`System` / `Dark` / `Light` preserving your live Omarchy accent), and max image dimension.
   - **Providers:** Manage API keys (with direct links to provider key pages), discover live available models, select models, and run connection tests.
   - **Tasks:** Optional per-task provider/model routing (**General**, **Vision / Crop**, **Selected Text**, **Translate**) plus a dedicated **Continue in Agent** CLI selector.
   - **Language & OCR:** Pick your default translation language, toggle active Tesseract OCR packs, and install additional Arch `tesseract-data-*` packs directly from Settings.
-  - **History:** Search recent conversations, inspect thumbnails & full threads, copy answers, resume visual context, hand off to your coding agent, or delete/clear history.
 
 ## Screenshots
 
@@ -90,7 +86,7 @@ omarchy plugin remove io.github.cgranier.screenlens
 Then optionally delete:
 - The `-- ScreenLens: begin.` … `-- ScreenLens: end.` block in `~/.config/hypr/bindings.lua`
 - The `-- ScreenLens layer rule: begin.` … `-- ScreenLens layer rule: end.` block in `~/.config/hypr/hyprland.lua`
-- `~/.config/omarchy/screenlens.json` and `~/.local/state/omarchy/screenlens/`
+- `~/.config/omarchy/screenlens.json`
 
 ## Keyboard Shortcuts
 
@@ -103,7 +99,7 @@ Then optionally delete:
 | `Enter` | Send prompt / follow-up (or stop & ask while voice recording) |
 | `Ctrl + G` | Toggle live Web Search grounding |
 | `Ctrl + M` | Toggle Superwhisper voice dictation inside overlay |
-| `Ctrl + H` | Resume most recent saved conversation (when chat is empty) |
+| `Ctrl + Z` | Restore last dismissed conversation from RAM (when prompt & chat are empty) |
 | `Ctrl + P` | Pin latest answer as a floating, non-blocking mini card |
 | `Alt + 1..4` | Explain / Summarize / Translate / Extract Text |
 | `Alt + 5..6` | Trigger detected Smart Context Action (QR / Diagnose / Extract Table) |
@@ -115,8 +111,8 @@ Bar widget: **Left-click** opens Settings (`c` captures, `v` launches Voice Ask)
 
 ## Privacy & Security
 
-- **Local-only secret storage:** API keys saved in Settings are stored exclusively in `~/.config/omarchy/screenlens.json` with `0600` (owner-only) permissions—never in `~/.config/omarchy/shell.json`, never in session history, and never passed in command-line arguments. Environment variables (`GEMINI_API_KEY` / `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OLLAMA_HOST`) are also auto-detected.
-- **Bounded, owner-only history:** Saved sessions and optional compressed frames live in `0600` files under `0700 ~/.local/state/omarchy/screenlens/`, expire automatically (24h default), enforce a hard 10 MB total image cap, and can be set to text-only or disabled altogether in **Settings → General**.
+- **Local-only secret storage:** API keys saved in Settings are stored exclusively in `~/.config/omarchy/screenlens.json` with `0600` (owner-only) permissions—never in `~/.config/omarchy/shell.json` and never passed in command-line arguments. Environment variables (`GEMINI_API_KEY` / `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OLLAMA_HOST`) are also auto-detected.
+- **Zero persistent capture or chat storage:** ScreenLens never saves screenshots or conversation history to disk. Pinned notes and `Ctrl+Z` undo live strictly in RAM for your current session and vanish on unpin or logout; ephemeral `/tmp` captures exist only for the active request and are auto-cleaned.
 - **No telemetry:** Screenshots and prompts are sent only to the AI provider or local CLI you explicitly choose.
 - **Safe QML rendering:** All dynamic text is rendered through a plain-text wrapper (`PlainText`) to prevent markup injection inside the shell process.
 
@@ -125,7 +121,7 @@ Bar widget: **Left-click** opens Settings (`c` captures, `v` launches Voice Ask)
 ```sh
 omarchy plugin validate .
 node tests/test_logic.mjs
-python3 -m unittest -v tests/test_scripts.py tests/test_config.py tests/test_providers.py tests/test_ocr_langs.py tests/test_updater.py tests/test_history.py
+python3 -m unittest -v tests/test_scripts.py tests/test_config.py tests/test_providers.py tests/test_ocr_langs.py tests/test_updater.py
 ```
 
 For local development installs from a working checkout:

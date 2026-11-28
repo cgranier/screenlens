@@ -111,7 +111,6 @@ PanelWindow {
     if (shown) {
       targetScreen = focusedScreen()
       collapsed = false
-      hasCustomPos = false
       Qt.callLater(clampCard)
     } else {
       dragging = false
@@ -120,7 +119,10 @@ PanelWindow {
   }
 
   onPinnedDataChanged: {
-    if (shown) {
+    if (!pinnedData) {
+      hasCustomPos = false
+      collapsed = false
+    } else if (shown) {
       collapsed = false
       Qt.callLater(clampCard)
     }

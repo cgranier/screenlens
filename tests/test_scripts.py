@@ -451,6 +451,28 @@ class ScreenLensTests(unittest.TestCase):
             if os.path.exists(direct["contextPath"]):
                 os.unlink(direct["contextPath"])
 
+    def test_ephemeral_ipc_payload_0600_unlink_and_path_guard(self):
+        import stat
+        payload = json.dumps({
+            "title": "Quick question",
+            "answer": "Answer text",
+            "messages": [{"role": "user", "text": "Quick question"}, {"role": "assistant", "text": "Answer text"}],
+        })
+        written = actions_mod.ephem_write_json(payload)
+        self.assertTrue(written["ok"])
+        path = written["path"]
+        self.assertTrue(os.path.isfile(path))
+        self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o600)
+
+        read_back = actions_mod.ephem_read_json(path)
+        self.assertTrue(read_back["ok"])
+        self.assertEqual(read_back["data"]["answer"], "Answer text")
+        self.assertFalse(os.path.exists(path), "Ephemeral IPC file must be unlinked immediately on read")
+
+        # Reject path traversal / arbitrary file paths.
+        bad = actions_mod.ephem_read_json("/etc/passwd")
+        self.assertFalse(bad["ok"])
+
     def test_qml_ui_safety_and_motion_conventions(self):
         qml_files = []
         for dirpath, dirnames, filenames in os.walk(ROOT_DIR):
