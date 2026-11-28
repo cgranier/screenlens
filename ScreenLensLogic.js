@@ -1103,6 +1103,365 @@ function renderChipPrompt(template, vars) {
   return tpl.replace(/\{\{\s*language\s*\}\}/gi, lang)
 }
 
+function _formatUtilityNumber(num, maxDecimals) {
+  if (typeof num !== "number" || !isFinite(num)) return ""
+  var dec = typeof maxDecimals === "number" ? maxDecimals : 2
+  var rounded = Number(num.toFixed(dec))
+  if (Object.is(rounded, -0)) rounded = 0
+  var str = String(rounded)
+  var parts = str.split(".")
+  if (Math.abs(rounded) >= 10000) {
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+  }
+  return parts.length > 1 ? (parts[0] + "." + parts[1]) : parts[0]
+}
+
+// Strict safe recursive-descent arithmetic evaluator (never uses eval/Function).
+function _safeEvalArithmetic(expr) {
+  var src = String(expr || "").trim()
+  if (!src || src.length > 64) return null
+  // Normalize unicode operators and strip thousand-separator commas inside numbers.
+  var norm = src
+    .replace(/[×✕]/g, "*")
+    .replace(/[÷]/g, "/")
+    .replace(/[−–—]/g, "-")
+    .replace(/(\d),(?=\d{3}\b)/g, "$1")
+
+  // Reject dates (2026-11-28, 11/28/2026, 11/28), phone numbers, and bare numbers.
+  if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(norm)) return null
+  if (/^\d{1,2}\/\d{1,2}(?:\/\d{2,4})?$/.test(norm)) return null
+  if (/^\d{3}-\d{3,4}(?:-\d{4})?$/.test(norm)) return null
+  if (/^[\d.\s]+$/.test(norm)) return null
+  if (!/^[0-9.\s+\-*/^()]+$/.test(norm)) return null
+
+  // Tokenize numbers, operators, and parens.
+  var tokens = []
+  var i = 0
+  var hasOp = false
+  while (i < norm.length) {
+    var ch = norm[i]
+    if (ch === " " || ch === "\t") { i++; continue }
+    if ((ch >= "0" && ch <= "9") || ch === ".") {
+      var start = i
+      var dots = 0
+      while (i < norm.length && ((norm[i] >= "0" && norm[i] <= "9") || norm[i] === ".")) {
+        if (norm[i] === ".") dots++
+        i++
+      }
+      if (dots > 1) return null
+      var rawNum = norm.slice(start, i)
+      if (rawNum === ".") return null
+      var val = parseFloat(rawNum)
+      if (!isFinite(val)) return null
+      tokens.push({ t: "num", v: val })
+      continue
+    }
+    if (ch === "+" || ch === "-" || ch === "*" || ch === "/" || ch === "^") {
+      hasOp = true
+      tokens.push({ t: "op", v: ch })
+      i++
+      continue
+    }
+    if (ch === "(" || ch === ")") {
+      tokens.push({ t: ch, v: ch })
+      i++
+      continue
+    }
+    return null
+  }
+  if (!hasOp || tokens.length < 3) return null
+
+  // Reject compact integer-hyphen-integer sports scores or IDs like "26-13" when
+  // there are no spaces and no other operators; "26 - 13" with spaces evaluates.
+  if (/^\d{1,3}-\d{1,3}$/.test(norm)) return null
+
+  var pos = 0
+  var depth = 0
+  function peek() { return pos < tokens.length ? tokens[pos] : null }
+  function consume() { return tokens[pos++] }
+
+  function parseExpr() {
+    var left = parseTerm()
+    if (left === null) return null
+    while (peek() && peek().t === "op" && (peek().v === "+" || peek().v === "-")) {
+      var op = consume().v
+      var right = parseTerm()
+      if (right === null) return null
+      left = op === "+" ? (left + right) : (left - right)
+      if (!isFinite(left)) return null
+    }
+    return left
+  }
+
+  function parseTerm() {
+    var left = parsePower()
+    if (left === null) return null
+    while (peek() && peek().t === "op" && (peek().v === "*" || peek().v === "/")) {
+      var op = consume().v
+      var right = parsePower()
+      if (right === null) return null
+      if (op === "/") {
+        if (Math.abs(right) < 1e-12) return null
+        left = left / right
+      } else {
+        left = left * right
+      }
+      if (!isFinite(left)) return null
+    }
+    return left
+  }
+
+  function parsePower() {
+    var base = parseUnary()
+    if (base === null) return null
+    if (peek() && peek().t === "op" && peek().v === "^") {
+      consume()
+      var exp = parsePower()
+      if (exp === null || Math.abs(exp) > 100) return null
+      var res = Math.pow(base, exp)
+      if (!isFinite(res)) return null
+      return res
+    }
+    return base
+  }
+
+  function parseUnary() {
+    if (peek() && peek().t === "op" && (peek().v === "+" || peek().v === "-")) {
+      var op = consume().v
+      var inner = parseUnary()
+      if (inner === null) return null
+      return op === "-" ? -inner : inner
+    }
+    return parsePrimary()
+  }
+
+  function parsePrimary() {
+    var tok = peek()
+    if (!tok) return null
+    if (tok.t === "num") {
+      consume()
+      return tok.v
+    }
+    if (tok.t === "(") {
+      if (depth >= 12) return null
+      depth++
+      consume()
+      var inner = parseExpr()
+      if (inner === null || !peek() || peek().t !== ")") return null
+      consume()
+      depth--
+      return inner
+    }
+    return null
+  }
+
+  var result = parseExpr()
+  if (result === null || pos !== tokens.length || !isFinite(result)) return null
+  return result
+}
+
+// Strips stray OCR wrapper punctuation (bullets, backticks, trailing commas/periods)
+// without damaging negative signs, math parentheses, or compound inch marks (5'11").
+function _cleanUtilityInput(text) {
+  var s = String(text || "").replace(/\s+/g, " ").trim()
+  if (!s) return ""
+  // Strip leading bullets, dots, quotes, backticks, chevrons, or bullet misreads ("+ " before non-digit / paren)
+  s = s.replace(/^[•·▪▫◦‣⁃«»`'"*,;:\s]+/, "")
+  // Strip trailing bullets, backticks, commas, semicolons, colons, periods (preserve trailing " after digit for 5'11")
+  s = s.replace(/[•·▪▫◦‣⁃«»`',;:\.\s]+$/, "")
+  if (s.length >= 2 && s[0] === '"' && s[s.length - 1] === '"') {
+    s = s.slice(1, -1).trim()
+  }
+  // If OCR misread a leading bullet dot as "+ " before a unit/temp/time (e.g. "+ 145 km"), strip it.
+  if (/^\+\s+\S/.test(s) && !/^\+\s*\d[\d.,]*\s*[+\-*/×÷^]/.test(s)) {
+    s = s.replace(/^\+\s+/, "")
+  }
+  return s.trim()
+}
+
+// Evaluates short selected text locally (0 ms, zero API calls, zero eval) for
+// temperature, common unit conversions, timezones, percentages, and arithmetic.
+function evaluateLocalUtility(text, opts) {
+  var clean = _cleanUtilityInput(text)
+  if (clean.length < 2 || clean.length > 64) return null
+
+  var o = opts || ({})
+
+  // 1. Temperature (°F <-> °C, K -> °C)
+  var tempMatch = clean.match(/^([+-]?\d+(?:\.\d+)?)\s*(?:(°|º|deg(?:rees?)?)\s*)?(fahrenheit|celsius|kelvin|[CFK])$/i)
+  if (tempMatch) {
+    var tVal = parseFloat(tempMatch[1])
+    var hasDeg = !!tempMatch[2]
+    var unitRaw = tempMatch[3].toLowerCase()
+    var hasSpace = /\s/.test(clean)
+    var isFullWord = unitRaw.length > 1
+    // Require °/deg, full unit name, or whitespace + realistic range so "2C" or "4F" codes never trigger.
+    if (isFinite(tVal) && (hasDeg || isFullWord || (hasSpace && tVal >= -150 && tVal <= 2000))) {
+      var u = unitRaw[0]
+      if (u === "f") {
+        var cVal = (tVal - 32) * 5 / 9
+        var cStr = _formatUtilityNumber(cVal, 1) + " °C"
+        return { kind: "temp", icon: "󰔏", label: cStr, copyValue: cStr, detail: clean + " = " + cStr }
+      }
+      if (u === "c") {
+        var fVal = tVal * 9 / 5 + 32
+        var fStr = _formatUtilityNumber(fVal, 1) + " °F"
+        return { kind: "temp", icon: "󰔏", label: fStr, copyValue: fStr, detail: clean + " = " + fStr }
+      }
+      if (u === "k" && tVal >= 0 && (isFullWord || hasSpace)) {
+        var kcVal = tVal - 273.15
+        var kcStr = _formatUtilityNumber(kcVal, 1) + " °C"
+        return { kind: "temp", icon: "󰔏", label: kcStr, copyValue: kcStr, detail: clean + " = " + kcStr }
+      }
+    }
+  }
+
+  // 2. Timezone conversion to local time (e.g. "2:30 PM PST", "14:00 UTC", "9am EST")
+  var tzMatch = clean.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(UTC|GMT|EST|EDT|CST|CDT|MST|MDT|PST|PDT|ET|CT|MT|PT|BST|CET|CEST|IST|JST|AEST|AEDT)$/i)
+  if (tzMatch) {
+    var hr = parseInt(tzMatch[1], 10)
+    var min = tzMatch[2] !== undefined ? parseInt(tzMatch[2], 10) : 0
+    var ampm = tzMatch[3] ? tzMatch[3].toLowerCase() : ""
+    var tzCode = tzMatch[4].toUpperCase()
+    var validTime = (tzMatch[2] !== undefined || ampm !== "") && min >= 0 && min <= 59
+    if (validTime) {
+      if (ampm) {
+        if (hr < 1 || hr > 12) validTime = false
+        else {
+          if (ampm === "pm" && hr !== 12) hr += 12
+          if (ampm === "am" && hr === 12) hr = 0
+        }
+      } else if (hr < 0 || hr > 23) {
+        validTime = false
+      }
+    }
+    if (validTime) {
+      var refDate = o.nowDate instanceof Date ? o.nowDate : new Date()
+      // Standard UTC offsets in minutes (positive east of UTC, negative west).
+      var janOff = new Date(refDate.getFullYear(), 0, 1).getTimezoneOffset()
+      var julOff = new Date(refDate.getFullYear(), 6, 1).getTimezoneOffset()
+      var isDstLocal = refDate.getTimezoneOffset() < Math.max(janOff, julOff)
+      var tzOffsets = {
+        UTC: 0, GMT: 0,
+        EST: -300, EDT: -240, ET: isDstLocal ? -240 : -300,
+        CST: -360, CDT: -300, CT: isDstLocal ? -300 : -360,
+        MST: -420, MDT: -360, MT: isDstLocal ? -360 : -420,
+        PST: -480, PDT: -420, PT: isDstLocal ? -420 : -480,
+        BST: 60, CET: 60, CEST: 120, IST: 330, JST: 540, AEST: 600, AEDT: 660
+      }
+      if (Object.prototype.hasOwnProperty.call(tzOffsets, tzCode)) {
+        var srcOffMin = tzOffsets[tzCode]
+        // JS getTimezoneOffset() is minutes WEST of UTC, so local east-offset is -getTimezoneOffset().
+        var localOffMin = typeof o.localOffsetMin === "number" ? o.localOffsetMin : (-refDate.getTimezoneOffset())
+        var targetOffMin = (srcOffMin === localOffMin) ? 0 : localOffMin
+        var targetSuffix = (srcOffMin === localOffMin) ? "UTC" : "local"
+        var totalMin = hr * 60 + min - srcOffMin + targetOffMin
+        var dayDelta = 0
+        while (totalMin < 0) { totalMin += 1440; dayDelta -= 1 }
+        while (totalMin >= 1440) { totalMin -= 1440; dayDelta += 1 }
+        var outHr24 = Math.floor(totalMin / 60)
+        var outMin = totalMin % 60
+        var minPad = outMin < 10 ? ("0" + outMin) : String(outMin)
+        var formatted = ""
+        if (targetSuffix === "UTC") {
+          var hrPad = outHr24 < 10 ? ("0" + outHr24) : String(outHr24)
+          formatted = hrPad + ":" + minPad + " UTC"
+        } else {
+          var outAmPm = outHr24 >= 12 ? "PM" : "AM"
+          var outHr12 = outHr24 % 12
+          if (outHr12 === 0) outHr12 = 12
+          formatted = outHr12 + ":" + minPad + " " + outAmPm
+        }
+        var dayTag = dayDelta > 0 ? " (+1d)" : (dayDelta < 0 ? " (-1d)" : "")
+        var label = targetSuffix === "UTC" ? (formatted + dayTag) : (formatted + " local" + dayTag)
+        return { kind: "time", icon: "󰥔", label: label, copyValue: formatted, detail: clean + " = " + label }
+      }
+    }
+  }
+
+  // 3. Compound feet & inches height (e.g. 5'11", 5 ft 11 in)
+  var heightMatch = clean.match(/^(\d{1,2})\s*(?:'|ft|feet)\s*(\d{1,2}(?:\.\d+)?)\s*(?:"|in|inches)?$/i)
+  if (heightMatch) {
+    var ft = parseInt(heightMatch[1], 10)
+    var inch = parseFloat(heightMatch[2])
+    if (ft >= 0 && ft <= 12 && inch >= 0 && inch < 12) {
+      var cmH = (ft * 12 + inch) * 2.54
+      var cmStr = _formatUtilityNumber(cmH, 1) + " cm"
+      return { kind: "unit", icon: "󰓡", label: cmStr, copyValue: cmStr, detail: clean + " = " + cmStr }
+    }
+  }
+
+  // 4. Standard metric <-> imperial unit conversions
+  var unitMatch = clean.match(/^([+-]?\d[\d,]*(?:\.\d+)?)(\s*)(km|kilometers?|kilometres?|mi|miles?|meters?|metres?|m|ft|feet|foot|inches|inch|in|cm|centimeters?|centimetres?|mm|millimeters?|millimetres?|yd|yards?|kg|kilograms?|grams?|g|lbs?|pounds?|oz|ounces?|liters?|litres?|ml|milliliters?|millilitres?|gal|gallons?|mph|kph|km\/h)$/i)
+  if (unitMatch) {
+    var uNum = parseFloat(unitMatch[1].replace(/,/g, ""))
+    var uSpace = unitMatch[2]
+    var uKey = unitMatch[3].toLowerCase()
+    // Avoid false positives on chat timestamps like "5m" or short codes like "2g" / "4in" without clear context.
+    var ambiguousBare = (uKey === "m" || uKey === "g" || uKey === "in") && !uSpace
+    if (isFinite(uNum) && !ambiguousBare) {
+      var convTable = {
+        km: [0.621371, "mi", 2], kilometer: [0.621371, "mi", 2], kilometers: [0.621371, "mi", 2], kilometre: [0.621371, "mi", 2], kilometres: [0.621371, "mi", 2],
+        mi: [1.609344, "km", 2], mile: [1.609344, "km", 2], miles: [1.609344, "km", 2],
+        m: [3.28084, "ft", 2], meter: [3.28084, "ft", 2], meters: [3.28084, "ft", 2], metre: [3.28084, "ft", 2], metres: [3.28084, "ft", 2],
+        ft: [0.3048, "m", 2], foot: [0.3048, "m", 2], feet: [0.3048, "m", 2],
+        cm: [0.393701, "in", 2], centimeter: [0.393701, "in", 2], centimeters: [0.393701, "in", 2], centimetre: [0.393701, "in", 2], centimetres: [0.393701, "in", 2],
+        mm: [0.0393701, "in", 2], millimeter: [0.0393701, "in", 2], millimeters: [0.0393701, "in", 2], millimetre: [0.0393701, "in", 2], millimetres: [0.0393701, "in", 2],
+        in: [2.54, "cm", 2], inch: [2.54, "cm", 2], inches: [2.54, "cm", 2],
+        yd: [0.9144, "m", 2], yard: [0.9144, "m", 2], yards: [0.9144, "m", 2],
+        kg: [2.204623, "lb", 2], kilogram: [2.204623, "lb", 2], kilograms: [2.204623, "lb", 2],
+        lb: [0.453592, "kg", 2], lbs: [0.453592, "kg", 2], pound: [0.453592, "kg", 2], pounds: [0.453592, "kg", 2],
+        g: [0.035274, "oz", 2], gram: [0.035274, "oz", 2], grams: [0.035274, "oz", 2],
+        oz: [28.34952, "g", 1], ounce: [28.34952, "g", 1], ounces: [28.34952, "g", 1],
+        liter: [0.264172, "gal", 2], liters: [0.264172, "gal", 2], litre: [0.264172, "gal", 2], litres: [0.264172, "gal", 2],
+        ml: [0.033814, "fl oz", 2], milliliter: [0.033814, "fl oz", 2], milliliters: [0.033814, "fl oz", 2], millilitre: [0.033814, "fl oz", 2], millilitres: [0.033814, "fl oz", 2],
+        gal: [3.785412, "L", 2], gallon: [3.785412, "L", 2], gallons: [3.785412, "L", 2],
+        mph: [1.609344, "km/h", 1],
+        kph: [0.621371, "mph", 1], "km/h": [0.621371, "mph", 1]
+      }
+      var spec = convTable[uKey]
+      if (spec) {
+        var outStr = _formatUtilityNumber(uNum * spec[0], spec[2]) + " " + spec[1]
+        return { kind: "unit", icon: "󰓡", label: outStr, copyValue: outStr, detail: clean + " = " + outStr }
+      }
+    }
+  }
+
+  // 5. Percentages ("18% of 240", "18% of $240", "$240 - 15%", "240 + 18%")
+  var pctOf = clean.match(/^([+-]?\d+(?:\.\d+)?)\s*%\s+of\s+([\$€£])?\s*(\d[\d,]*(?:\.\d+)?)$/i)
+  if (pctOf) {
+    var pct = parseFloat(pctOf[1])
+    var sym = pctOf[2] || ""
+    var base = parseFloat(pctOf[3].replace(/,/g, ""))
+    if (isFinite(pct) && isFinite(base)) {
+      var pRes = (pct / 100) * base
+      var pFmt = sym ? (sym + pRes.toFixed(2)) : _formatUtilityNumber(pRes, 4)
+      return { kind: "math", icon: "󰃬", label: "= " + pFmt, copyValue: pFmt, detail: clean + " = " + pFmt }
+    }
+  }
+  var pctDelta = clean.match(/^([\$€£])?\s*(\d[\d,]*(?:\.\d+)?)\s*([+\-])\s*(\d+(?:\.\d+)?)\s*%$/)
+  if (pctDelta) {
+    var dSym = pctDelta[1] || ""
+    var dBase = parseFloat(pctDelta[2].replace(/,/g, ""))
+    var dSign = pctDelta[3] === "-" ? -1 : 1
+    var dPct = parseFloat(pctDelta[4])
+    if (isFinite(dBase) && isFinite(dPct)) {
+      var dRes = dBase * (1 + dSign * (dPct / 100))
+      var dFmt = dSym ? (dSym + dRes.toFixed(2)) : _formatUtilityNumber(dRes, 4)
+      return { kind: "math", icon: "󰃬", label: "= " + dFmt, copyValue: dFmt, detail: clean + " = " + dFmt }
+    }
+  }
+
+  // 6. Safe arithmetic expressions ("(1450 - 320) / 4", "12 * 8", "1,450 - 320")
+  var mathVal = _safeEvalArithmetic(clean)
+  if (mathVal !== null) {
+    var mFmt = _formatUtilityNumber(mathVal, 4)
+    return { kind: "math", icon: "󰃬", label: "= " + mFmt, copyValue: mFmt, detail: clean + " = " + mFmt }
+  }
+
+  return null
+}
+
 // Picks high-contrast foreground ink for a hex color (e.g. text over accent fills).
 function inkOn(hexColor) {
   var s = String(hexColor || "").trim()

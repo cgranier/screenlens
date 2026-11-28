@@ -15,7 +15,7 @@ Summon ScreenLens over any window or workspace, circle or box one or more region
   - Switch between **Circle** (freehand lasso), **Box** (draggable rectangle marquee), and **Text** (live OCR selection) via the top bar or `Tab`.
   - Resize and reposition locked selections with live corner/edge handles.
   - Hold **`Shift + drag`** to pin up to 6 numbered regions (`#1`..`#6`) and ask about or compare them in a single prompt.
-- **Instant On-Screen OCR Text Selection:** Runs Tesseract word-box OCR in the background as soon as the overlay opens; highlight any visible text, copy (`Ctrl+C`), extract text in 0 ms, or ask AI about it.
+- **Instant On-Screen OCR Text Selection & 0 ms Local Conversions:** Runs Tesseract word-box OCR in the background as soon as the overlay opens; highlight any visible text, copy (`Ctrl+C`), extract text in 0 ms, or ask AI about it. Highlighting or boxing a temperature (`350°F`), unit (`145 km`, `5'11"`), timezone (`2:30 PM PST`, `14:00 UTC`), percentage (`18% of $240`), or math expression (`(1450 - 320) / 4`) shows an instant 0 ms local result pill with 1-click Copy (zero API calls).
 - **Quick-Access Voice Ask (`Super + Alt + V`):** Press one hotkey anywhere to capture your screen and immediately start Superwhisper dictation; press again (or `Enter`) to transcribe and auto-ask hands-free. Also supports in-overlay `Ctrl+M` dictation with late auto-paste deduplication.
 - **Context-Aware Smart Quick Actions (`Alt+5..6`):** Zero-latency local detection surfaces high-contrast action pills when relevant:
   - **QR / Barcodes:** **Open QR Link** (strict `http://`/`https://` validation) or **Copy QR** (when `zbar` is installed).

@@ -85,6 +85,22 @@ Item {
     }
     return null
   }
+  property string croppedUtilityText: ""
+  readonly property var localUtilityResult: {
+    var candidate = String(root.selectedText || "").trim()
+    if (!candidate && root.selectionRects.length === 1 && !root.ocrLoading && root.ocrWords.length > 0) {
+      var extracted = Logic.extractWordsInRect(root.ocrWords, root.selectionRects[0])
+      if (extracted && extracted.text) {
+        var fastRes = Logic.evaluateLocalUtility(extracted.text)
+        if (fastRes) return fastRes
+      }
+    }
+    if (!candidate && root.selectionRects.length === 1 && root.croppedUtilityText) {
+      candidate = root.croppedUtilityText
+    }
+    if (!candidate) return null
+    return Logic.evaluateLocalUtility(candidate)
+  }
   property int textDragStartIdx: -1
   property var textDragStartPoint: null
   property var selectedWordIndices: []
@@ -285,6 +301,7 @@ Item {
     root.selectedWordMap = ({})
     root.selectedText = ""
     root.selectedTextBounds = null
+    root.croppedUtilityText = ""
     root.messages = []
     root.streaming = false
     root.streamingText = ""
@@ -315,6 +332,7 @@ Item {
   function stopBackgroundWork() {
     if (askProc.running) askProc.running = false
     if (ocrProc.running) ocrProc.running = false
+    if (utilOcrProc.running) utilOcrProc.running = false
     root.pendingExtractCommand = null
     if (extractProc.running) {
       root.extractCancelled = true
@@ -356,7 +374,33 @@ Item {
     root.dragHandle = ""
     root.dragStartRect = null
     root.lassoPinMode = false
+    root.croppedUtilityText = ""
+    if (utilOcrProc.running) utilOcrProc.running = false
     root.setSelectedWords([], "", null)
+  }
+
+  function probeCroppedUtility() {
+    root.croppedUtilityText = ""
+    if (utilOcrProc.running) utilOcrProc.running = false
+    if (!root.screenshotPath || root.selectionRects.length !== 1) return
+    var rect = root.selectionRects[0]
+    if (!rect || rect.w > 720 || rect.h > 200) return
+    // If full-screen OCR already matched cleanly, skip cropped probe.
+    if (!root.ocrLoading && root.ocrWords.length > 0) {
+      var fast = Logic.extractWordsInRect(root.ocrWords, rect)
+      if (fast && fast.text && Logic.evaluateLocalUtility(fast.text)) return
+    }
+    var crop = root.currentImageCrop()
+    if (!crop) return
+    utilOcrProc.command = [
+      "/usr/bin/python3",
+      root.pluginDir + "/scripts/ocr.py",
+      root.screenshotPath,
+      "--text-only",
+      "--crop",
+      crop.x + "," + crop.y + "," + crop.w + "," + crop.h
+    ]
+    utilOcrProc.running = true
   }
 
   function setMode(nextMode) {
@@ -1021,6 +1065,21 @@ Item {
   }
 
   Process {
+    id: utilOcrProc
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        if (root.selectionRects.length !== 1) return
+        var res = null
+        try { res = JSON.parse(text) } catch (e) { res = null }
+        if (res && res.ok && res.text) {
+          root.croppedUtilityText = String(res.text).trim()
+        }
+      }
+    }
+  }
+
+  Process {
     id: extractProc
     stdout: StdioCollector {
       waitForEnd: true
@@ -1352,6 +1411,7 @@ Item {
           var postHit = Logic.hitTestRegions(root.selectionRects, mouse.x, mouse.y, 12)
           root.hoverRegionIndex = postHit.index
           root.hoverHandle = postHit.handle
+          root.probeCroppedUtility()
           promptField.forceActiveFocus()
           return
         }
@@ -1394,6 +1454,7 @@ Item {
           root.boxStartPoint = null
           root.boxPreviewRect = null
           root.lassoPinMode = false
+          root.probeCroppedUtility()
         }
         promptField.forceActiveFocus()
       }
@@ -1544,6 +1605,56 @@ Item {
         id: selectionRow
         anchors.centerIn: parent
         spacing: Style.spacing.xs
+
+        // Instant 0 ms local conversion / math result pill (1-click copy, zero API call)
+        Rectangle {
+          id: localUtilPill
+          visible: !!root.localUtilityResult
+          anchors.verticalCenter: parent.verticalCenter
+          radius: Math.min(4, root.cornerRadius)
+          color: utilHover.hovered ? Qt.lighter(root.accentColor, 1.08) : root.accentColor
+          border.width: 1
+          border.color: utilHover.hovered ? Util.alpha(root.onAccentInk, 0.35) : Util.alpha(root.onAccentInk, 0.18)
+          implicitWidth: utilRow.implicitWidth + Style.space(16)
+          implicitHeight: Style.space(26)
+
+          Row {
+            id: utilRow
+            anchors.centerIn: parent
+            spacing: Style.space(5)
+
+            PlainText {
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.localUtilityResult ? root.localUtilityResult.icon : "󰃬"
+              color: root.onAccentInk
+              font.family: root.uiFont
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            PlainText {
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.localUtilityResult ? root.localUtilityResult.label : ""
+              color: root.onAccentInk
+              font.family: root.uiFont
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+            }
+          }
+
+          HoverHandler { id: utilHover; cursorShape: Qt.PointingHandCursor }
+          MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: if (root.localUtilityResult) root.copyText(root.localUtilityResult.copyValue)
+          }
+
+          Ui.PanelToolTip {
+            visible: utilHover.hovered && !!root.localUtilityResult
+            text: root.localUtilityResult
+              ? (root.localUtilityResult.detail + " · " + strings.t("action.clickToCopy"))
+              : ""
+          }
+        }
 
         Ui.Button {
           foreground: root.fgColor
