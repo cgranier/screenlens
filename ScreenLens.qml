@@ -62,14 +62,21 @@ Item {
   property var ocrWords: [] // Mapped to logical overlay coordinates
   property var rawOcrCodes: []
   property var ocrCodes: [] // Decoded QR/barcodes mapped to overlay coordinates
-  readonly property var contextActions: Logic.detectScreenContext({
+  readonly property bool smartActionsEnabled: root.userConfig ? (root.userConfig.smartActionsEnabled !== false) : true
+  readonly property var activeQuickChips: Logic.resolveQuickChips(root.userConfig, {
+    explain: strings.t("chip.explain"),
+    summarize: strings.t("chip.summarize"),
+    translate: strings.t("chip.translate"),
+    extract: strings.t("chip.extractText")
+  })
+  readonly property var contextActions: root.smartActionsEnabled ? Logic.detectScreenContext({
     words: root.ocrWords,
     codes: root.ocrCodes,
     selectionRects: root.selectionRects,
     selectedText: root.selectedText,
     windowClass: root.windowClass,
     windowTitle: root.windowTitle
-  })
+  }) : []
   readonly property var activeQrAction: {
     if (!root.selectionRect || !Array.isArray(root.contextActions)) return null
     for (var i = 0; i < root.contextActions.length; i++) {
@@ -608,6 +615,25 @@ Item {
       root.streamingText = ""
       root.errorMessage = strings.t("error.askFailed").arg(String(ev.message || "unknown error"))
     }
+  }
+
+  function runQuickChipAt(index) {
+    var chips = root.activeQuickChips
+    if (!Array.isArray(chips) || index < 0 || index >= chips.length) return
+    var chip = chips[index]
+    if (!chip) return
+    if (chip.action === "extract_text") {
+      root.extractAndCopyText()
+      return
+    }
+    var targetLang = (root.userConfig && root.userConfig.translateLanguage)
+      ? String(root.userConfig.translateLanguage).trim()
+      : "English"
+    if (!targetLang) targetLang = "English"
+    var rendered = Logic.renderChipPrompt(chip.prompt, { language: targetLang })
+    if (!rendered) return
+    var explicitTask = (chip.task && chip.task !== "auto") ? chip.task : root.inferTask("")
+    root.submitPrompt(rendered, explicitTask)
   }
 
   function runQuickChip(kind) {
@@ -2280,15 +2306,11 @@ Item {
         }
 
         Repeater {
-          model: [
-            { kind: "explain",   icon: "󰋗", label: strings.t("chip.explain"),     key: "Alt+1" },
-            { kind: "summarize", icon: "󰦨", label: strings.t("chip.summarize"),   key: "Alt+2" },
-            { kind: "translate", icon: "󰗊", label: strings.t("chip.translate"),   key: "Alt+3" },
-            { kind: "extract",   icon: "󰗧", label: strings.t("chip.extractText"), key: "Alt+4" }
-          ]
+          model: root.activeQuickChips
           delegate: Rectangle {
             id: chipRect
             required property var modelData
+            required property int index
             radius: Math.min(4, root.cornerRadius)
             color: chipHover.hovered ? root.bgColor : Util.alpha(root.bgColor, 0.92)
             border.width: 1
@@ -2332,7 +2354,7 @@ Item {
             MouseArea {
               anchors.fill: parent
               cursorShape: Qt.PointingHandCursor
-              onClicked: root.runQuickChip(modelData.kind)
+              onClicked: root.runQuickChipAt(chipRect.index)
             }
           }
         }
@@ -2623,10 +2645,10 @@ Item {
                   root.copyContextOrAnswer()
                   event.accepted = true
                 } else if (event.modifiers & Qt.AltModifier) {
-                  if (event.key === Qt.Key_1) { root.runQuickChip("explain"); event.accepted = true }
-                  else if (event.key === Qt.Key_2) { root.runQuickChip("summarize"); event.accepted = true }
-                  else if (event.key === Qt.Key_3) { root.runQuickChip("translate"); event.accepted = true }
-                  else if (event.key === Qt.Key_4) { root.runQuickChip("extract"); event.accepted = true }
+                  if (event.key === Qt.Key_1) { root.runQuickChipAt(0); event.accepted = true }
+                  else if (event.key === Qt.Key_2) { root.runQuickChipAt(1); event.accepted = true }
+                  else if (event.key === Qt.Key_3) { root.runQuickChipAt(2); event.accepted = true }
+                  else if (event.key === Qt.Key_4) { root.runQuickChipAt(3); event.accepted = true }
                   else if (event.key === Qt.Key_5 && root.contextActions.length > 0) { root.runContextAction(root.contextActions[0]); event.accepted = true }
                   else if (event.key === Qt.Key_6 && root.contextActions.length > 1) { root.runContextAction(root.contextActions[1]); event.accepted = true }
                 }

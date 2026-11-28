@@ -115,6 +115,126 @@ PROVIDER_CATALOG = {
     },
 }
 
+DEFAULT_QUICK_CHIPS = [
+    {
+        "id": "explain",
+        "label": "Explain",
+        "icon": "󰋗",
+        "action": "prompt",
+        "task": "auto",
+        "prompt": "Explain what is shown here clearly and concisely.",
+    },
+    {
+        "id": "summarize",
+        "label": "Summarize",
+        "icon": "󰦨",
+        "action": "prompt",
+        "task": "auto",
+        "prompt": "Summarize the key points shown here in concise bullets.",
+    },
+    {
+        "id": "translate",
+        "label": "Translate",
+        "icon": "󰗊",
+        "action": "prompt",
+        "task": "translate",
+        "prompt": "Translate any visible text here into {{language}}. If it is already in {{language}}, briefly clarify any jargon or idioms.",
+    },
+    {
+        "id": "extract",
+        "label": "Extract Text",
+        "icon": "󰗧",
+        "action": "extract_text",
+        "task": "text",
+        "prompt": "",
+    },
+]
+
+QUICK_CHIP_PRESETS = DEFAULT_QUICK_CHIPS + [
+    {
+        "id": "factcheck",
+        "label": "Fact-Check",
+        "icon": "󰄬",
+        "action": "prompt",
+        "task": "general",
+        "prompt": "Fact-check the claims shown here concisely. Flag anything misleading, outdated, or missing key context.",
+    },
+    {
+        "id": "reply",
+        "label": "Draft Reply",
+        "icon": "󰑚",
+        "action": "prompt",
+        "task": "text",
+        "prompt": "Draft a clear, natural, concise reply to the message or thread shown here.",
+    },
+    {
+        "id": "review",
+        "label": "Review Code",
+        "icon": "󰅴",
+        "action": "prompt",
+        "task": "vision",
+        "prompt": "Review the code shown here for bugs, edge cases, and simpler ways to write it. Keep suggestions concrete.",
+    },
+    {
+        "id": "eli5",
+        "label": "ELI5",
+        "icon": "󰌵",
+        "action": "prompt",
+        "task": "general",
+        "prompt": "Explain what is shown here in plain, jargon-free language anyone can understand quickly.",
+    },
+    {
+        "id": "json",
+        "label": "Extract JSON",
+        "icon": "󰘦",
+        "action": "prompt",
+        "task": "vision",
+        "prompt": "Extract the structured information shown here as clean, valid JSON inside a fenced ```json code block.",
+    },
+]
+
+VALID_CHIP_ACTIONS = {"prompt", "extract_text"}
+VALID_CHIP_TASKS = {"auto", "general", "vision", "text", "translate"}
+
+
+def normalize_quick_chips(raw_chips: object) -> list[dict]:
+    """Normalize custom quick chips to exactly 4 valid Alt+1..4 slots."""
+    items = raw_chips if isinstance(raw_chips, list) else []
+    out: list[dict] = []
+    for idx in range(4):
+        default_chip = copy.deepcopy(DEFAULT_QUICK_CHIPS[idx])
+        raw = items[idx] if idx < len(items) and isinstance(items[idx], dict) else None
+        if not raw:
+            out.append(default_chip)
+            continue
+        cid = re.sub(r"[^A-Za-z0-9_-]", "", str(raw.get("id") or ""))[:32] or f"chip-{idx + 1}"
+        label = " ".join(str(raw.get("label") or "").split())[:28] or default_chip["label"]
+        icon = str(raw.get("icon") or "").strip()[:4] or default_chip["icon"]
+        action = str(raw.get("action") or "prompt").strip().lower()
+        if action not in VALID_CHIP_ACTIONS:
+            action = "prompt"
+        task = str(raw.get("task") or "auto").strip().lower()
+        if task not in VALID_CHIP_TASKS:
+            task = "auto"
+        prompt = str(raw.get("prompt") or "").strip()[:1200]
+        if action == "prompt" and not prompt:
+            prompt = default_chip["prompt"] or "Explain what is shown here clearly and concisely."
+        elif action == "extract_text":
+            prompt = ""
+            task = "text"
+        out.append(
+            {
+                "id": cid,
+                "label": label,
+                "icon": icon,
+                "action": action,
+                "task": task,
+                "prompt": prompt,
+            }
+        )
+    return out
+
+
 DEFAULT_CONFIG = {
     "schemaVersion": 2,
     "keybind": "SUPER + ALT + A",
@@ -124,6 +244,8 @@ DEFAULT_CONFIG = {
     "defaultMode": "lasso",
     "maxImageDim": 1920,
     "autoCheckUpdates": True,
+    "smartActionsEnabled": True,
+    "quickChips": copy.deepcopy(DEFAULT_QUICK_CHIPS),
     "translateLanguage": "English",
     "ocrLanguages": ["eng"],
     "defaultProvider": "auto",
@@ -203,6 +325,8 @@ def normalize_config(raw: dict | None) -> dict:
         dim = 1920
     cfg["maxImageDim"] = max(512, min(3840, dim))
     cfg["autoCheckUpdates"] = bool(cfg.get("autoCheckUpdates", True))
+    cfg["smartActionsEnabled"] = bool(cfg.get("smartActionsEnabled", True))
+    cfg["quickChips"] = normalize_quick_chips(cfg.get("quickChips"))
     cfg["voiceAutoSubmit"] = bool(cfg.get("voiceAutoSubmit", True))
     cfg["voiceKeybind"] = str(cfg.get("voiceKeybind") or "").strip()
 
@@ -572,7 +696,18 @@ def main() -> int:
                 proc = subprocess.run([default_bin], capture_output=True, text=True, timeout=5)
                 if proc.returncode == 0:
                     default_agent = proc.stdout.strip()
-            print(json.dumps({"ok": True, "providers": PROVIDER_CATALOG, "defaultAgent": default_agent}), flush=True)
+            print(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "providers": PROVIDER_CATALOG,
+                        "defaultAgent": default_agent,
+                        "defaultQuickChips": DEFAULT_QUICK_CHIPS,
+                        "quickChipPresets": QUICK_CHIP_PRESETS,
+                    }
+                ),
+                flush=True,
+            )
             return 0
 
         if args.cmd == "patch":

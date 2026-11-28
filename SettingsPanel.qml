@@ -46,8 +46,8 @@ Ui.Panel {
   readonly property int cornerRadius: Style.cornerRadius
   readonly property string uiFont: Style.font.family
 
-  property string activeTab: "general" // "general" | "providers" | "tasks" | "language"
-  readonly property var tabIds: ["general", "providers", "tasks", "language"]
+  property string activeTab: "general" // "general" | "providers" | "tasks" | "actions" | "language"
+  readonly property var tabIds: ["general", "providers", "tasks", "actions", "language"]
 
   // Live config state loaded from 0600 ~/.config/omarchy/screenlens.json
   property var config: ({})
@@ -78,6 +78,16 @@ Ui.Panel {
   property var ocrAvailable: []
   property string selectedOcrInstallCode: ""
   property bool installingOcrPack: false
+
+  // Custom Quick Actions tab state (Alt+1..4)
+  property int selectedChipIndex: 0
+  property string chipLabelDraft: ""
+  property string chipIconDraft: "󰋗"
+  property string chipActionDraft: "prompt"
+  property string chipTaskDraft: "auto"
+  property string chipPromptDraft: ""
+  property var defaultQuickChips: Logic.DEFAULT_QUICK_CHIPS
+  property var quickChipPresets: Logic.DEFAULT_QUICK_CHIPS
 
   // Update check state (cached hourly via scripts/updater.py)
   property bool updateChecking: false
@@ -202,6 +212,76 @@ Ui.Panel {
     root.pendingEphemWriteJson = JSON.stringify(root.lastThread)
     ephemWriteProc.running = false
     ephemWriteProc.running = true
+  }
+
+  function selectQuickChipSlot(idx) {
+    var chips = Logic.resolveQuickChips(root.config, {
+      explain: strings.t("chip.explain"),
+      summarize: strings.t("chip.summarize"),
+      translate: strings.t("chip.translate"),
+      extract: strings.t("chip.extractText")
+    })
+    var clamped = Math.max(0, Math.min(3, Number(idx) || 0))
+    root.selectedChipIndex = clamped
+    var c = chips[clamped] || Logic.DEFAULT_QUICK_CHIPS[clamped]
+    root.chipLabelDraft = String(c.label || "")
+    root.chipIconDraft = String(c.icon || "󰋗")
+    root.chipActionDraft = String(c.action || "prompt")
+    root.chipTaskDraft = String(c.task || "auto")
+    root.chipPromptDraft = String(c.prompt || "")
+  }
+
+  function applyQuickChipPreset(preset) {
+    if (!preset) return
+    root.chipLabelDraft = String(preset.label || "")
+    root.chipIconDraft = String(preset.icon || "󰋗")
+    root.chipActionDraft = String(preset.action || "prompt")
+    root.chipTaskDraft = String(preset.task || "auto")
+    root.chipPromptDraft = String(preset.prompt || "")
+  }
+
+  function saveQuickChipSlot() {
+    var chips = Logic.resolveQuickChips(root.config, {
+      explain: strings.t("chip.explain"),
+      summarize: strings.t("chip.summarize"),
+      translate: strings.t("chip.translate"),
+      extract: strings.t("chip.extractText")
+    })
+    var idx = Math.max(0, Math.min(3, root.selectedChipIndex))
+    var out = []
+    for (var i = 0; i < 4; i++) {
+      var src = chips[i]
+      if (i === idx) {
+        var act = root.chipActionDraft === "extract_text" ? "extract_text" : "prompt"
+        var cleanLabel = String(root.chipLabelDraft || "").trim() || src.label
+        out.push({
+          id: cleanLabel.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || ("chip-" + (i + 1)),
+          label: cleanLabel.slice(0, 28),
+          icon: String(root.chipIconDraft || "").trim().slice(0, 4) || src.icon,
+          action: act,
+          task: act === "extract_text" ? "text" : String(root.chipTaskDraft || "auto"),
+          prompt: act === "extract_text" ? "" : String(root.chipPromptDraft || "").trim().slice(0, 1200)
+        })
+      } else {
+        out.push({
+          id: src.id,
+          label: src.label,
+          icon: src.icon,
+          action: src.action,
+          task: src.task,
+          prompt: src.prompt
+        })
+      }
+    }
+    root.patchConfig({ quickChips: out })
+  }
+
+  function resetQuickChips() {
+    var defs = Array.isArray(root.defaultQuickChips) && root.defaultQuickChips.length === 4
+      ? root.defaultQuickChips
+      : Logic.DEFAULT_QUICK_CHIPS
+    root.patchConfig({ quickChips: defs })
+    root.setStatus(strings.t("settings.actionsResetDone"), false)
   }
 
   function isOcrLangActive(code) {
@@ -569,6 +649,7 @@ Ui.Panel {
           root.voiceKeybindDraft = String(res.config.voiceKeybind || "")
           var ol = (res.config.providers && res.config.providers.ollama) ? res.config.providers.ollama : ({})
           root.ollamaHostDraft = String(ol.host || "http://127.0.0.1:11434")
+          root.selectQuickChipSlot(root.selectedChipIndex)
           if (root.opened && !root.updateCheckedThisOpen && res.config.autoCheckUpdates !== false) {
             root.updateCheckedThisOpen = true
             root.checkForUpdates(false)
@@ -589,6 +670,12 @@ Ui.Panel {
         if (res && res.ok && res.providers) {
           root.catalog = res.providers
           root.omarchyDefaultAgent = String(res.defaultAgent || "")
+          if (Array.isArray(res.defaultQuickChips) && res.defaultQuickChips.length === 4) {
+            root.defaultQuickChips = res.defaultQuickChips
+          }
+          if (Array.isArray(res.quickChipPresets) && res.quickChipPresets.length > 0) {
+            root.quickChipPresets = res.quickChipPresets
+          }
         }
       }
     }
@@ -607,6 +694,7 @@ Ui.Panel {
         try { res = JSON.parse(text) } catch (e) { res = null }
         if (res && res.ok && res.config) {
           root.config = res.config
+          root.selectQuickChipSlot(root.selectedChipIndex)
           root.setStatus(strings.t("settings.saved"), false)
         } else {
           root.setStatus((res && res.error) ? res.error : strings.t("settings.saveFailed"), true)
@@ -1092,6 +1180,7 @@ Ui.Panel {
                 { id: "general",   icon: "󰒓", label: strings.t("settings.tab.general") },
                 { id: "providers", icon: "󰚩", label: strings.t("settings.tab.providers") },
                 { id: "tasks",     icon: "󰒋", label: strings.t("settings.tab.tasks") },
+                { id: "actions",   icon: "󰉁", label: strings.t("settings.tab.actions") },
                 { id: "language",  icon: "󰗊", label: strings.t("settings.tab.language") }
               ]
               delegate: Item {
@@ -1191,6 +1280,13 @@ Ui.Panel {
 
               SLTabs.TasksTab {
                 visible: root.activeTab === "tasks"
+                width: parent.width
+                panel: root
+                strings: strings
+              }
+
+              SLTabs.ActionsTab {
+                visible: root.activeTab === "actions"
                 width: parent.width
                 panel: root
                 strings: strings

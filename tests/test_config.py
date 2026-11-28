@@ -147,6 +147,49 @@ class ConfigBackendTests(unittest.TestCase):
             self.assertIn(config_mod.LAYER_BLOCK_BEGIN, hl_text)
             self.assertIn('namespace = "screenlens"', hl_text)
 
+    def test_quick_chips_normalization_and_defaults(self):
+        # Empty / missing quickChips yields the 4 built-in defaults
+        cfg = config_mod.normalize_config({})
+        self.assertEqual(len(cfg["quickChips"]), 4)
+        self.assertEqual([c["id"] for c in cfg["quickChips"]], ["explain", "summarize", "translate", "extract"])
+        self.assertIn("{{language}}", cfg["quickChips"][2]["prompt"])
+        self.assertEqual(cfg["quickChips"][3]["action"], "extract_text")
+        self.assertTrue(cfg["smartActionsEnabled"])
+
+        # Partial custom list pads remaining slots with defaults and sanitizes invalid action/task
+        custom = config_mod.normalize_config({
+            "smartActionsEnabled": False,
+            "quickChips": [
+                {
+                    "id": "fact!",
+                    "label": "  Fact-Check  ",
+                    "icon": "󰄬",
+                    "action": "invalid_kind",
+                    "task": "bogus",
+                    "prompt": "Verify claims.",
+                },
+                {
+                    "id": "ocr",
+                    "label": "Grab Text",
+                    "icon": "󰗧",
+                    "action": "extract_text",
+                    "task": "vision",
+                    "prompt": "should be cleared",
+                },
+            ],
+        })
+        self.assertFalse(custom["smartActionsEnabled"])
+        self.assertEqual(len(custom["quickChips"]), 4)
+        self.assertEqual(custom["quickChips"][0]["id"], "fact")
+        self.assertEqual(custom["quickChips"][0]["label"], "Fact-Check")
+        self.assertEqual(custom["quickChips"][0]["action"], "prompt")
+        self.assertEqual(custom["quickChips"][0]["task"], "auto")
+        self.assertEqual(custom["quickChips"][1]["action"], "extract_text")
+        self.assertEqual(custom["quickChips"][1]["task"], "text")
+        self.assertEqual(custom["quickChips"][1]["prompt"], "")
+        self.assertEqual(custom["quickChips"][2]["id"], "translate")
+        self.assertEqual(custom["quickChips"][3]["id"], "extract")
+
 
 if __name__ == "__main__":
     unittest.main()
