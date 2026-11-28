@@ -238,6 +238,38 @@ class SessionHistoryTests(unittest.TestCase):
             latest = json.loads(p_latest.stdout)
             self.assertEqual(latest["session"]["id"], saved["session"]["id"])
 
+    def test_pinned_note_save_get_clear_and_0600_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = os.path.join(tmp, "state")
+            saved = sl_history.save_pinned(
+                {
+                    "sessionId": "sl-99",
+                    "providerLabel": "anthropic · haiku",
+                    "webSearch": True,
+                    "windowClass": "ghostty",
+                    "messages": [
+                        {"role": "user", "text": "How do I restart waybar?"},
+                        {"role": "assistant", "text": "Run `omarchy restart shell`."},
+                    ],
+                },
+                state_dir=state_dir,
+            )
+            self.assertTrue(saved["ok"])
+            self.assertEqual(saved["pinned"]["title"], "How do I restart waybar?")
+            self.assertEqual(saved["pinned"]["answer"], "Run `omarchy restart shell`.")
+            pfile = sl_history.pinned_path(state_dir)
+            self.assertEqual(stat.S_IMODE(os.stat(pfile).st_mode), 0o600)
+
+            fetched = sl_history.get_pinned(state_dir=state_dir)
+            self.assertTrue(fetched["ok"])
+            self.assertEqual(fetched["pinned"]["sessionId"], "sl-99")
+
+            cleared = sl_history.clear_pinned(state_dir=state_dir)
+            self.assertTrue(cleared["ok"])
+            self.assertTrue(cleared["cleared"])
+            self.assertFalse(os.path.exists(pfile))
+            self.assertIsNone(sl_history.get_pinned(state_dir=state_dir)["pinned"])
+
 
 if __name__ == "__main__":
     unittest.main()

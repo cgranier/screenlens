@@ -170,14 +170,20 @@ assert.equal(
   "",
   "late auto-paste after voice auto-submit clears input must be stripped"
 )
-assert.deepEqual(plain(sandbox.parseLaunchPayload("")), { voice: false, autoSubmit: null, resumeId: "", resumeLast: false })
-assert.deepEqual(plain(sandbox.parseLaunchPayload('{"voice":true}')), { voice: true, autoSubmit: null, resumeId: "", resumeLast: false })
-assert.deepEqual(plain(sandbox.parseLaunchPayload('{"voiceAutoSubmit":true}')), { voice: true, autoSubmit: true, resumeId: "", resumeLast: false })
-assert.deepEqual(plain(sandbox.parseLaunchPayload('{"voice":true,"autoSubmit":false}')), { voice: true, autoSubmit: false, resumeId: "", resumeLast: false })
-assert.deepEqual(plain(sandbox.parseLaunchPayload('{"resumeId":"sl-123_abc"}')), { voice: false, autoSubmit: null, resumeId: "sl-123_abc", resumeLast: false })
-assert.deepEqual(plain(sandbox.parseLaunchPayload('{"resumeId":"../bad"}')), { voice: false, autoSubmit: null, resumeId: "", resumeLast: false })
-assert.deepEqual(plain(sandbox.parseLaunchPayload('{"resumeLast":true}')), { voice: false, autoSubmit: null, resumeId: "", resumeLast: true })
-assert.deepEqual(plain(sandbox.parseLaunchPayload("not-json")), { voice: false, autoSubmit: null, resumeId: "", resumeLast: false })
+assert.deepEqual(plain(sandbox.parseLaunchPayload("")), { voice: false, autoSubmit: null, resumeId: "", resumeLast: false, resumePinned: false })
+assert.deepEqual(plain(sandbox.parseLaunchPayload('{"voice":true}')), { voice: true, autoSubmit: null, resumeId: "", resumeLast: false, resumePinned: false })
+assert.deepEqual(plain(sandbox.parseLaunchPayload('{"voiceAutoSubmit":true}')), { voice: true, autoSubmit: true, resumeId: "", resumeLast: false, resumePinned: false })
+assert.deepEqual(plain(sandbox.parseLaunchPayload('{"voice":true,"autoSubmit":false}')), { voice: true, autoSubmit: false, resumeId: "", resumeLast: false, resumePinned: false })
+assert.deepEqual(plain(sandbox.parseLaunchPayload('{"resumeId":"sl-123_abc"}')), { voice: false, autoSubmit: null, resumeId: "sl-123_abc", resumeLast: false, resumePinned: false })
+assert.deepEqual(plain(sandbox.parseLaunchPayload('{"resumeId":"../bad"}')), { voice: false, autoSubmit: null, resumeId: "", resumeLast: false, resumePinned: false })
+assert.deepEqual(plain(sandbox.parseLaunchPayload('{"resumeLast":true}')), { voice: false, autoSubmit: null, resumeId: "", resumeLast: true, resumePinned: false })
+assert.deepEqual(plain(sandbox.parseLaunchPayload('{"resumePinned":true}')), { voice: false, autoSubmit: null, resumeId: "", resumeLast: false, resumePinned: true })
+assert.deepEqual(plain(sandbox.parseLaunchPayload("not-json")), { voice: false, autoSubmit: null, resumeId: "", resumeLast: false, resumePinned: false })
+
+// Floating mini-card position clamping
+assert.deepEqual(plain(sandbox.clampFloatingPosition(-40, -10, 380, 260, 1440, 960, 18)), { x: 18, y: 18 })
+assert.deepEqual(plain(sandbox.clampFloatingPosition(1300, 900, 380, 260, 1440, 960, 18)), { x: 1042, y: 682 })
+assert.deepEqual(plain(sandbox.clampFloatingPosition(400, 300, 380, 260, 1440, 960, 18)), { x: 400, y: 300 })
 
 // History preview, filtering, and relative time helpers
 const sampleSessions = [

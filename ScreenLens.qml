@@ -111,7 +111,9 @@ Item {
   property var latestHistorySession: null
   property string pendingResumeId: ""
   property bool pendingResumeLast: false
+  property bool pendingResumePinned: false
   property string pendingHistorySaveJson: ""
+  property string pendingPinJson: ""
 
   // Superwhisper voice state: "idle" | "recording" | "transcribing"
   property string voiceState: "idle"
@@ -173,7 +175,12 @@ Item {
     var launch = Logic.parseLaunchPayload(payloadJson)
     if (root.opened) {
       if (launch.resumeId) {
+        root.pendingResumePinned = launch.resumePinned
         root.loadHistorySessionById(launch.resumeId)
+        return
+      }
+      if (launch.resumePinned) {
+        root.loadPinnedSession()
         return
       }
       if (launch.resumeLast && root.latestHistorySession) {
@@ -198,6 +205,7 @@ Item {
     root.resetSession()
     root.pendingResumeId = launch.resumeId
     root.pendingResumeLast = launch.resumeLast
+    root.pendingResumePinned = launch.resumePinned
     root.voiceLaunchPending = launch.voice
     if (launch.voice) {
       root.voiceAutoSubmitExplicit = (launch.autoSubmit !== null)
@@ -281,6 +289,8 @@ Item {
     root.latestHistorySession = null
     root.pendingResumeId = ""
     root.pendingResumeLast = false
+    root.pendingResumePinned = false
+    root.pendingPinJson = ""
     root.voiceState = "idle"
     root.voiceBaseline = ""
     root.voicePromptBefore = ""
@@ -515,6 +525,33 @@ Item {
     historyGetProc.command = ["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "get", clean]
     historyGetProc.running = false
     historyGetProc.running = true
+  }
+
+  function loadPinnedSession() {
+    pinGetProc.running = false
+    pinGetProc.running = true
+  }
+
+  function pinCurrentAnswer() {
+    if (root.streaming && root.streamingText.trim().length > 0) {
+      root.cancelStreaming()
+    }
+    var ans = root.latestAssistantText()
+    if (!ans) return
+    var allMsgs = root.messages.slice()
+    var payload = {
+      sessionId: root.sessionId,
+      answer: ans,
+      providerLabel: root.providerLabel,
+      webSearch: root.answerUsedWebSearch,
+      windowClass: root.windowClass,
+      windowTitle: root.windowTitle,
+      selectedText: root.selectedText,
+      messages: allMsgs
+    }
+    root.pendingPinJson = JSON.stringify(payload)
+    pinSaveProc.running = false
+    pinSaveProc.running = true
   }
 
   function switchToLiveScreen(silent) {
@@ -973,6 +1010,9 @@ Item {
           var targetSid = root.pendingResumeId
           root.pendingResumeId = ""
           root.loadHistorySessionById(targetSid)
+        } else if (root.pendingResumePinned) {
+          root.pendingResumePinned = false
+          root.loadPinnedSession()
         } else {
           historyLatestProc.running = false
           historyLatestProc.running = true
@@ -1115,8 +1155,60 @@ Item {
         var res = null
         try { res = JSON.parse(text) } catch (e) { res = null }
         if (res && res.ok && res.session) {
+          root.pendingResumePinned = false
           root.latestHistorySession = res.session
           root.restoreHistorySession(res.session)
+          Quickshell.execDetached(["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "pin-clear"])
+        } else if (root.pendingResumePinned) {
+          root.pendingResumePinned = false
+          root.loadPinnedSession()
+        }
+      }
+    }
+  }
+
+  Process {
+    id: pinSaveProc
+    stdinEnabled: true
+    command: ["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "pin-set", "-"]
+    onStarted: pinSaveProc.write(root.pendingPinJson + "\n")
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var res = null
+        try { res = JSON.parse(text) } catch (e) { res = null }
+        if (res && res.ok) {
+          Util.execArgv(["omarchy-shell", "screenlens-settings", "showPin"])
+          root.dismiss()
+        }
+      }
+    }
+  }
+
+  Process {
+    id: pinGetProc
+    command: ["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "pin-get"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var res = null
+        try { res = JSON.parse(text) } catch (e) { res = null }
+        if (res && res.ok && res.pinned) {
+          var p = res.pinned
+          var msgs = Array.isArray(p.messages) && p.messages.length > 0
+            ? p.messages
+            : [{ role: "assistant", text: String(p.answer || "") }]
+          root.restoreHistorySession({
+            id: String(p.sessionId || ""),
+            messages: msgs,
+            providerLabel: String(p.providerLabel || ""),
+            webSearch: p.webSearch === true,
+            selectedText: String(p.selectedText || ""),
+            windowClass: String(p.windowClass || ""),
+            windowTitle: String(p.windowTitle || ""),
+            framePath: ""
+          })
+          Quickshell.execDetached(["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "pin-clear"])
         }
       }
     }
@@ -1982,6 +2074,16 @@ Item {
               Ui.Button {
                 foreground: root.fgColor
                 visible: root.latestAssistantText().length > 0
+                text: strings.t("action.pin")
+                iconText: "󰐃"
+                fontSize: Style.font.bodySmall
+                tooltipText: strings.t("action.pinTooltip")
+                onClicked: root.pinCurrentAnswer()
+              }
+
+              Ui.Button {
+                foreground: root.fgColor
+                visible: root.latestAssistantText().length > 0
                 text: strings.t("action.copy")
                 iconText: "󰆏"
                 fontSize: Style.font.bodySmall
@@ -2675,6 +2777,9 @@ Item {
                   if (root.latestHistorySession && root.messages.length === 0 && !root.streaming) {
                     root.restoreHistorySession(root.latestHistorySession)
                   }
+                  event.accepted = true
+                } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_P) {
+                  if (root.latestAssistantText().length > 0) root.pinCurrentAnswer()
                   event.accepted = true
                 } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_M) {
                   root.toggleVoice()

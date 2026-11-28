@@ -97,6 +97,10 @@ Ui.Panel {
   property int updateSweepTick: 0
   property bool updateCheckedThisOpen: false
 
+  // Pinned floating mini-card state (survives overlay dismissal)
+  property bool pinnedVisible: false
+  property var pinnedNote: null
+
   implicitWidth: barButton.implicitWidth
   implicitHeight: barButton.implicitHeight
 
@@ -116,6 +120,8 @@ Ui.Panel {
       if (root.tabIds.indexOf(tabName) !== -1) root.activeTab = tabName
       root.open()
     }
+    function showPin(): void { root.loadPinnedNote() }
+    function closePin(): void { root.closePinnedNote() }
   }
 
   onOpenedChanged: {
@@ -227,6 +233,32 @@ Ui.Panel {
     confirmResetTimer.stop()
     historyClearProc.running = false
     historyClearProc.running = true
+  }
+
+  function loadPinnedNote() {
+    if (Object.keys(root.config || ({})).length === 0) {
+      loadConfigProc.running = false
+      loadConfigProc.running = true
+    }
+    pinLoadProc.running = false
+    pinLoadProc.running = true
+  }
+
+  function closePinnedNote() {
+    root.pinnedVisible = false
+    root.pinnedNote = null
+    pinClearProc.running = false
+    pinClearProc.running = true
+  }
+
+  function reexpandPinnedNote(pinned) {
+    var sid = (pinned && pinned.sessionId) ? String(pinned.sessionId) : ""
+    root.pinnedVisible = false
+    root.pinnedNote = null
+    Util.execArgv([
+      "omarchy-shell", "shell", "summon", root.moduleName,
+      JSON.stringify({ resumeId: sid, resumePinned: true })
+    ])
   }
 
   function isOcrLangActive(code) {
@@ -843,6 +875,52 @@ Ui.Panel {
       waitForEnd: true
       onStreamFinished: root.loadHistory()
     }
+  }
+
+  Process {
+    id: pinLoadProc
+    command: ["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "pin-get"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var res = null
+        try { res = JSON.parse(text) } catch (e) { res = null }
+        if (res && res.ok && res.pinned) {
+          root.pinnedNote = res.pinned
+          root.pinnedVisible = true
+        } else {
+          root.pinnedVisible = false
+          root.pinnedNote = null
+        }
+      }
+    }
+  }
+
+  Process {
+    id: pinClearProc
+    command: ["/usr/bin/python3", root.pluginDir + "/scripts/history.py", "pin-clear"]
+  }
+
+  SLUi.PinnedAnswerCard {
+    id: pinnedCard
+    shown: root.pinnedVisible
+    pinnedData: root.pinnedNote
+    bgColor: root.bgColor
+    fgColor: root.fgColor
+    accentColor: root.accentColor
+    borderColor: root.borderColor
+    hairlineColor: root.hairline
+    hoverFill: root.hoverFill
+    mutedInk: root.mutedInk
+    cornerRadius: root.cornerRadius
+    uiFont: root.uiFont
+    themeMode: root.themeMode
+    strings: strings
+    onCopyRequested: function(txt) {
+      Quickshell.execDetached(["wl-copy", "--", String(txt || "").slice(0, 65536)])
+    }
+    onReexpandRequested: function(pinned) { root.reexpandPinnedNote(pinned) }
+    onCloseRequested: root.closePinnedNote()
   }
 
   // Top-bar widget icon: custom crisp vector viewfinder mark.
