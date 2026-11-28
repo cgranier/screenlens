@@ -188,6 +188,24 @@ assert.deepEqual(plain(sandbox.clampFloatingPosition(-40, -10, 380, 260, 1440, 9
 assert.deepEqual(plain(sandbox.clampFloatingPosition(1300, 900, 380, 260, 1440, 960, 18)), { x: 1042, y: 682 })
 assert.deepEqual(plain(sandbox.clampFloatingPosition(400, 300, 380, 260, 1440, 960, 18)), { x: 400, y: 300 })
 
+// Custom quick-action chips & {{language}} placeholder expansion
+const defaultChips = plain(sandbox.resolveQuickChips({}, { explain: "Explain", extract: "Extract Text" }))
+assert.equal(defaultChips.length, 4)
+assert.equal(defaultChips[0].key, "Alt+1")
+assert.equal(defaultChips[3].action, "extract_text")
+const customChips = plain(sandbox.resolveQuickChips({
+  quickChips: [
+    { id: "roast", label: "Roast Code", icon: "󰅴", action: "prompt", task: "vision", prompt: "Review this code in {{language}}." }
+  ]
+}))
+assert.equal(customChips[0].label, "Roast Code")
+assert.equal(customChips[0].task, "vision")
+assert.equal(customChips[1].id, "summarize")
+assert.equal(
+  sandbox.renderChipPrompt("Translate into {{language}} ({{ LANGUAGE }}).", { language: "Spanish" }),
+  "Translate into Spanish (Spanish)."
+)
+
 // 8. Contrast ink helper and PlainText-safe answer block parser
 assert.equal(sandbox.inkOn("#f5f6fa"), "#101315")
 assert.equal(sandbox.inkOn("#181a22"), "#f5f6fa")

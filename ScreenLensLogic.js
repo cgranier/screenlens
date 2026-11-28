@@ -1013,6 +1013,96 @@ function clampFloatingPosition(x, y, cardW, cardH, screenW, screenH, margin) {
   }
 }
 
+// Built-in default quick-action chips for Alt+1..4 when user has not customized them.
+var DEFAULT_QUICK_CHIPS = [
+  {
+    id: "explain",
+    label: "Explain",
+    icon: "󰋗",
+    action: "prompt",
+    task: "auto",
+    prompt: "Explain what is shown here clearly and concisely."
+  },
+  {
+    id: "summarize",
+    label: "Summarize",
+    icon: "󰦨",
+    action: "prompt",
+    task: "auto",
+    prompt: "Summarize the key points shown here in concise bullets."
+  },
+  {
+    id: "translate",
+    label: "Translate",
+    icon: "󰗊",
+    action: "prompt",
+    task: "translate",
+    prompt: "Translate any visible text here into {{language}}. If it is already in {{language}}, briefly clarify any jargon or idioms."
+  },
+  {
+    id: "extract",
+    label: "Extract Text",
+    icon: "󰗧",
+    action: "extract_text",
+    task: "text",
+    prompt: ""
+  }
+]
+
+// Resolves user-configured quickChips into 4 safe, ready-to-render Alt+1..4 chip objects.
+function resolveQuickChips(userConfig, fallbackLabels) {
+  var fb = fallbackLabels || ({})
+  var configured = (userConfig && Array.isArray(userConfig.quickChips)) ? userConfig.quickChips : []
+  var out = []
+  for (var i = 0; i < 4; i++) {
+    var def = DEFAULT_QUICK_CHIPS[i]
+    var defLabel = fb[def.id] || def.label
+    var raw = (i < configured.length && configured[i] && typeof configured[i] === "object") ? configured[i] : null
+    if (!raw) {
+      out.push({
+        id: def.id,
+        label: defLabel,
+        icon: def.icon,
+        action: def.action,
+        task: def.task,
+        prompt: def.prompt,
+        key: "Alt+" + (i + 1)
+      })
+      continue
+    }
+    var action = (raw.action === "extract_text") ? "extract_text" : "prompt"
+    var task = String(raw.task || "auto")
+    if (task !== "auto" && task !== "general" && task !== "vision" && task !== "text" && task !== "translate") {
+      task = "auto"
+    }
+    var label = String(raw.label || "").replace(/\s+/g, " ").trim().slice(0, 28) || defLabel
+    var icon = String(raw.icon || "").trim().slice(0, 4) || def.icon
+    var prompt = String(raw.prompt || "").trim().slice(0, 1200)
+    if (action === "prompt" && !prompt) {
+      prompt = def.prompt || "Explain what is shown here clearly and concisely."
+    }
+    out.push({
+      id: String(raw.id || ("chip-" + (i + 1))),
+      label: label,
+      icon: icon,
+      action: action,
+      task: action === "extract_text" ? "text" : task,
+      prompt: action === "extract_text" ? "" : prompt,
+      key: "Alt+" + (i + 1)
+    })
+  }
+  return out
+}
+
+// Expands template placeholders (currently {{language}}) inside a quick-chip prompt.
+function renderChipPrompt(template, vars) {
+  var tpl = String(template || "").trim()
+  if (!tpl) return ""
+  var v = vars || ({})
+  var lang = String(v.language || "English").trim() || "English"
+  return tpl.replace(/\{\{\s*language\s*\}\}/gi, lang)
+}
+
 // Picks high-contrast foreground ink for a hex color (e.g. text over accent fills).
 function inkOn(hexColor) {
   var s = String(hexColor || "").trim()

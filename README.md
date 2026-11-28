@@ -21,7 +21,7 @@ Summon ScreenLens over any window or workspace, circle or box one or more region
   - **QR / Barcodes:** **Open QR Link** (strict `http://`/`https://` validation) or **Copy QR** (when `zbar` is installed).
   - **Errors & Stack Traces:** **Diagnose & Fix** for tracebacks, compiler errors, and HTTP 4xx/5xx failures.
   - **Tables:** **Extract Table** into a clean Markdown table + copyable fenced CSV block.
-- **Standard Quick-Action Chips (`Alt+1..4`):** One-click **Explain**, **Summarize**, **Translate** (to your configured target language), and **Extract Text**.
+- **Customizable Quick-Action Chips (`Alt+1..4`):** Defaults to **Explain**, **Summarize**, **Translate** (using `{{language}}`), and **Extract Text** — customize any slot in **Settings → Actions** with built-in presets (*Fact-Check*, *Draft Reply*, *Review Code*, *ELI5*, *Extract JSON*) or your own prompts, icons, and task routing.
 - **Optional Live Web Search Grounding (`Ctrl+G`):** Toggle live web search per question (off by default) with a **`WEB`** badge on grounded answers.
 - **Pinned Floating Mini Answer Card (`Ctrl+P`):** Click **Pin** (or press `Ctrl+P`) on any answer to dismiss the fullscreen overlay and float the formatted answer in a draggable, collapsible, click-through corner card (complete with 1-click code-block copy) while you work in underlying apps. Click **`󰁌`** on the mini card anytime to continue the same conversation directly against your **current live screen** — pressing `Esc` keeps or updates the pinned card until you explicitly click `×` to unpin.
 - **Instant In-Memory Undo (`Ctrl+Z`):** Accidentally hit `Esc`? Reopen ScreenLens and press `Ctrl+Z` (with an empty prompt) to restore your last dismissed conversation from RAM onto your live screen — zero files written to disk.
@@ -33,6 +33,7 @@ Summon ScreenLens over any window or workspace, circle or box one or more region
   - **General:** Managed Hyprland keybinds (`Super + Alt + A` & Voice Ask `Super + Alt + V`, with backup + `hyprctl` validation & rollback), default selection mode, theme (`System` / `Dark` / `Light` preserving your live Omarchy accent), and max image dimension.
   - **Providers:** Manage API keys (with direct links to provider key pages), discover live available models, select models, and run connection tests.
   - **Tasks:** Optional per-task provider/model routing (**General**, **Vision / Crop**, **Selected Text**, **Translate**) plus a dedicated **Continue in Agent** CLI selector.
+  - **Actions:** Customize your 4 quick-action chips (`Alt+1..4`) with 1-click presets, custom icons, prompt templates (`{{language}}`), and task routing, plus toggle contextual smart pills.
   - **Language & OCR:** Pick your default translation language, toggle active Tesseract OCR packs, and install additional Arch `tesseract-data-*` packs directly from Settings.
 
 ## Screenshots
