@@ -43,6 +43,7 @@
   "action.copy": "Copy",
   "action.copied": "Copied",
   "action.copyText": "Copy Text",
+  "action.clickToCopy": "Click to copy",
   "action.askSelection": "Ask AI",
   "action.handoff": "Continue in Agent",
   "action.pin": "Pin",

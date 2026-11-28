@@ -85,6 +85,15 @@ Item {
     }
     return null
   }
+  readonly property var localUtilityResult: {
+    var candidate = String(root.selectedText || "").trim()
+    if (!candidate && root.selectionRects.length === 1 && !root.ocrLoading && root.ocrWords.length > 0) {
+      var extracted = Logic.extractWordsInRect(root.ocrWords, root.selectionRects[0])
+      if (extracted && extracted.text) candidate = String(extracted.text).trim()
+    }
+    if (!candidate) return null
+    return Logic.evaluateLocalUtility(candidate)
+  }
   property int textDragStartIdx: -1
   property var textDragStartPoint: null
   property var selectedWordIndices: []
@@ -1544,6 +1553,56 @@ Item {
         id: selectionRow
         anchors.centerIn: parent
         spacing: Style.spacing.xs
+
+        // Instant 0 ms local conversion / math result pill (1-click copy, zero API call)
+        Rectangle {
+          id: localUtilPill
+          visible: !!root.localUtilityResult
+          anchors.verticalCenter: parent.verticalCenter
+          radius: Math.min(4, root.cornerRadius)
+          color: utilHover.hovered ? Qt.lighter(root.accentColor, 1.08) : root.accentColor
+          border.width: 1
+          border.color: utilHover.hovered ? Util.alpha(root.onAccentInk, 0.35) : Util.alpha(root.onAccentInk, 0.18)
+          implicitWidth: utilRow.implicitWidth + Style.space(16)
+          implicitHeight: Style.space(26)
+
+          Row {
+            id: utilRow
+            anchors.centerIn: parent
+            spacing: Style.space(5)
+
+            PlainText {
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.localUtilityResult ? root.localUtilityResult.icon : "󰃬"
+              color: root.onAccentInk
+              font.family: root.uiFont
+              font.pixelSize: Style.font.bodySmall
+            }
+
+            PlainText {
+              anchors.verticalCenter: parent.verticalCenter
+              text: root.localUtilityResult ? root.localUtilityResult.label : ""
+              color: root.onAccentInk
+              font.family: root.uiFont
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+            }
+          }
+
+          HoverHandler { id: utilHover; cursorShape: Qt.PointingHandCursor }
+          MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: if (root.localUtilityResult) root.copyText(root.localUtilityResult.copyValue)
+          }
+
+          Ui.PanelToolTip {
+            visible: utilHover.hovered && !!root.localUtilityResult
+            text: root.localUtilityResult
+              ? (root.localUtilityResult.detail + " · " + strings.t("action.clickToCopy"))
+              : ""
+          }
+        }
 
         Ui.Button {
           foreground: root.fgColor

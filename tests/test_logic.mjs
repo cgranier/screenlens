@@ -206,6 +206,52 @@ assert.equal(
   "Translate into Spanish (Spanish)."
 )
 
+// 10. Instant 0 ms local conversions & safe math evaluator (#26)
+const fToC = plain(sandbox.evaluateLocalUtility("350°F"))
+assert.equal(fToC.kind, "temp")
+assert.equal(fToC.label, "176.7 °C")
+assert.equal(plain(sandbox.evaluateLocalUtility("20°C")).label, "68 °F")
+assert.equal(plain(sandbox.evaluateLocalUtility("300 K")).label, "26.9 °C")
+assert.equal(sandbox.evaluateLocalUtility("2C"), null, "apartment/grade codes must not trigger temperature")
+
+// Unit conversions
+assert.equal(plain(sandbox.evaluateLocalUtility("145 km")).label, "90.1 mi")
+assert.equal(plain(sandbox.evaluateLocalUtility("10 lb")).label, "4.54 kg")
+assert.equal(plain(sandbox.evaluateLocalUtility("5'11\"")).label, "180.3 cm")
+assert.equal(plain(sandbox.evaluateLocalUtility("65 mph")).label, "104.6 km/h")
+assert.equal(sandbox.evaluateLocalUtility("5m"), null, "relative chat timestamps like 5m must not trigger meters")
+
+// Timezone conversions (deterministic with explicit localOffsetMin = -300 EST)
+const pstToEst = plain(sandbox.evaluateLocalUtility("2:30 PM PST", { localOffsetMin: -300 }))
+assert.equal(pstToEst.kind, "time")
+assert.equal(pstToEst.label, "5:30 PM local")
+assert.equal(pstToEst.copyValue, "5:30 PM")
+const utcToEst = plain(sandbox.evaluateLocalUtility("14:00 UTC", { localOffsetMin: -300 }))
+assert.equal(utcToEst.label, "9:00 AM local")
+const sameTz = plain(sandbox.evaluateLocalUtility("5:30 PM EST", { localOffsetMin: -300 }))
+assert.equal(sameTz.label, "22:30 UTC")
+const nextDay = plain(sandbox.evaluateLocalUtility("11:00 PM PST", { localOffsetMin: -300 }))
+assert.equal(nextDay.label, "2:00 AM local (+1d)")
+
+// Percentages & safe arithmetic
+assert.equal(plain(sandbox.evaluateLocalUtility("18% of 240")).label, "= 43.2")
+assert.equal(plain(sandbox.evaluateLocalUtility("18% of $240")).label, "= $43.20")
+assert.equal(plain(sandbox.evaluateLocalUtility("$150 - 20%")).label, "= $120.00")
+assert.equal(plain(sandbox.evaluateLocalUtility("(1450 - 320) / 4")).label, "= 282.5")
+assert.equal(plain(sandbox.evaluateLocalUtility("1,450 - 320")).label, "= 1130")
+assert.equal(plain(sandbox.evaluateLocalUtility("2^10")).label, "= 1024")
+assert.equal(plain(sandbox.evaluateLocalUtility("12 × 8")).label, "= 96")
+
+// Anti-false-positive guards
+assert.equal(sandbox.evaluateLocalUtility("2026-11-28"), null, "ISO dates must not evaluate as subtraction")
+assert.equal(sandbox.evaluateLocalUtility("11/28/2026"), null, "slash dates must not evaluate as division")
+assert.equal(sandbox.evaluateLocalUtility("555-123-4567"), null, "phone numbers must not evaluate")
+assert.equal(sandbox.evaluateLocalUtility("26-13"), null, "compact scores must not evaluate")
+assert.equal(sandbox.evaluateLocalUtility("1450"), null, "bare numbers must not evaluate")
+assert.equal(sandbox.evaluateLocalUtility("10 / 0"), null, "division by zero must return null")
+assert.equal(sandbox.evaluateLocalUtility("process.exit(1)"), null, "arbitrary JS must be rejected")
+assert.equal(sandbox.evaluateLocalUtility("Good morning, how are you doing today?"), null)
+
 // 8. Contrast ink helper and PlainText-safe answer block parser
 assert.equal(sandbox.inkOn("#f5f6fa"), "#101315")
 assert.equal(sandbox.inkOn("#181a22"), "#f5f6fa")
