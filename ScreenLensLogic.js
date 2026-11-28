@@ -975,7 +975,7 @@ function dedupeLateVoicePaste(currentText, expectedAfterInsert, transcript) {
 
 // Safely parses a JSON summon payload passed to ScreenLens.open(payloadJson).
 function parseLaunchPayload(payloadJson) {
-  var out = { voice: false, autoSubmit: null, resumeId: "", resumeLast: false }
+  var out = { voice: false, autoSubmit: null, resumeId: "", resumeLast: false, resumePinned: false }
   if (!payloadJson) return out
   var obj = null
   if (typeof payloadJson === "object") {
@@ -998,7 +998,21 @@ function parseLaunchPayload(payloadJson) {
   if (obj.resumeLast === true) {
     out.resumeLast = true
   }
+  if (obj.resumePinned === true) {
+    out.resumePinned = true
+  }
   return out
+}
+
+// Clamps a floating mini-card position cleanly inside screen bounds with margin.
+function clampFloatingPosition(x, y, cardW, cardH, screenW, screenH, margin) {
+  var m = typeof margin === "number" ? Math.max(0, margin) : 16
+  var maxX = Math.max(m, Number(screenW || 0) - Number(cardW || 0) - m)
+  var maxY = Math.max(m, Number(screenH || 0) - Number(cardH || 0) - m)
+  return {
+    x: Math.round(clamp(Number(x || 0), m, maxX)),
+    y: Math.round(clamp(Number(y || 0), m, maxY))
+  }
 }
 
 // Extracts concise title, latest answer snippet, and turn count for a saved session.

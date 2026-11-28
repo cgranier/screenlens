@@ -39,6 +39,90 @@ def state_paths(state_dir: str = DEFAULT_STATE_DIR) -> tuple[str, str, str, str]
     return root, history_file, frames_dir, legacy_thumbs_dir
 
 
+def pinned_path(state_dir: str = DEFAULT_STATE_DIR) -> str:
+    root, _, _, _ = state_paths(state_dir)
+    return os.path.join(root, "pinned.json")
+
+
+def save_pinned(payload: dict, state_dir: str = DEFAULT_STATE_DIR) -> dict:
+    root, _, _, _ = state_paths(state_dir)
+    ensure_private_dir(root)
+    pfile = pinned_path(state_dir)
+
+    messages = sanitize_messages(payload.get("messages"))
+    answer = str(payload.get("answer") or "").strip()[:MAX_MSG_CHARS]
+    if not answer:
+        for msg in reversed(messages):
+            if msg.get("role") == "assistant" and msg.get("text"):
+                answer = str(msg["text"])[:MAX_MSG_CHARS]
+                break
+    if not answer and not messages:
+        return {"ok": False, "error": "Nothing to pin"}
+
+    raw_sid = str(payload.get("sessionId") or payload.get("id") or "").strip()
+    sid = raw_sid if (raw_sid and SESSION_ID_RE.match(raw_sid)) else ""
+    title = str(payload.get("title") or "").strip()[:160]
+    if not title:
+        for msg in messages:
+            if msg.get("role") == "user" and msg.get("text"):
+                title = " ".join(str(msg["text"]).split())[:160]
+                break
+
+    entry = {
+        "schemaVersion": 1,
+        "pinnedAt": int(time.time() * 1000),
+        "sessionId": sid,
+        "title": title or "ScreenLens Note",
+        "answer": answer,
+        "providerLabel": str(payload.get("providerLabel") or "")[:120],
+        "webSearch": bool(payload.get("webSearch", False)),
+        "windowClass": str(payload.get("windowClass") or "")[:120],
+        "windowTitle": str(payload.get("windowTitle") or "")[:240],
+        "selectedText": str(payload.get("selectedText") or "")[:MAX_SELECTED_TEXT],
+        "messages": messages,
+    }
+
+    fd, tmp_path = tempfile.mkstemp(prefix=".pinned.", suffix=".tmp", dir=root)
+    try:
+        os.chmod(tmp_path, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(entry, f, indent=2)
+            f.write("\n")
+        os.replace(tmp_path, pfile)
+        os.chmod(pfile, 0o600)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    return {"ok": True, "pinned": entry}
+
+
+def get_pinned(state_dir: str = DEFAULT_STATE_DIR) -> dict:
+    pfile = pinned_path(state_dir)
+    try:
+        with open(pfile, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {"ok": True, "pinned": None}
+    if not isinstance(data, dict) or not (data.get("answer") or data.get("messages")):
+        return {"ok": True, "pinned": None}
+    return {"ok": True, "pinned": data}
+
+
+def clear_pinned(state_dir: str = DEFAULT_STATE_DIR) -> dict:
+    pfile = pinned_path(state_dir)
+    removed = False
+    if os.path.exists(pfile):
+        try:
+            os.unlink(pfile)
+            removed = True
+        except OSError:
+            pass
+    return {"ok": True, "cleared": removed}
+
+
 def ensure_private_dir(path: str) -> None:
     os.makedirs(path, mode=0o700, exist_ok=True)
     try:
@@ -557,6 +641,11 @@ def main() -> int:
     sub.add_parser("clear")
     sub.add_parser("prune")
 
+    p_pin_set = sub.add_parser("pin-set")
+    p_pin_set.add_argument("source", nargs="?", default="-", help="JSON file path or '-' for stdin")
+    sub.add_parser("pin-get")
+    sub.add_parser("pin-clear")
+
     args = parser.parse_args()
     try:
         if args.cmd == "save":
@@ -584,6 +673,18 @@ def main() -> int:
             res = clear_history(state_dir=args.state_dir)
         elif args.cmd == "prune":
             res = prune_history(state_dir=args.state_dir, config_path=args.config)
+        elif args.cmd == "pin-set":
+            if args.source == "-":
+                raw = sys.stdin.readline()
+                payload = json.loads(raw) if raw.strip() else {}
+            else:
+                with open(args.source, "r", encoding="utf-8") as f:
+                    payload = json.load(f)
+            res = save_pinned(payload, state_dir=args.state_dir)
+        elif args.cmd == "pin-get":
+            res = get_pinned(state_dir=args.state_dir)
+        elif args.cmd == "pin-clear":
+            res = clear_pinned(state_dir=args.state_dir)
         else:
             res = {"ok": False, "error": "Unknown command"}
     except Exception as exc:
